@@ -1,0 +1,42 @@
+# detekt.yml — permissive config for the JVM Probe SDK.
+#
+# Detekt's defaults flag style choices that are idiomatic in this SDK (long parameter lists
+# on builder-style data classes, large sealed-class files mirroring the Go gate). This config
+# builds on the default config and relaxes the handful of rules that would otherwise fight
+# the reference structure rather than catch real defects.
+
+complexity:
+  LongParameterList:
+    active: false
+  LongMethod:
+    active: false
+  TooLongFunction:
+    active: false
+  ComplexCondition:
+    active: false
+  CyclomaticComplexMethod:
+    active: false
+  LargeClass:
+    active: false
+naming:
+  FunctionParameterNaming:
+    active: false
+  MatchingDeclarationName:
+    active: false
+style:
+  MaxLineLength:
+    active: false
+  WildcardImport:
+    active: false
+  ReturnCount:
+    active: false
+  LoopWithTooManyBreakStatements:
+    active: false
+  ThrowsCount:
+    active: false
+  MagicNumber:
+    active: false
+  UseDataClass:
+    active: false
+  NestedClassesVisibility:
+    active: false

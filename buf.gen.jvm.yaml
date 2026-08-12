@@ -1,0 +1,26 @@
+# sdk/jvm/buf.gen.jvm.yaml — JVM-only codegen for the Probe SDK.
+#
+# Deliberately NOT the repo-root buf.gen.yaml: the root template runs every language plugin
+# (including the locally-built protoc-gen-elixir), so it cannot run in this worktree and would
+# regenerate five trees for one. This template runs only the Java plugin and roots its output at
+# sdk/jvm/gen/ (gitignored), mirroring sdk/go/buf.gen.go.yaml and sdk/python/buf.gen.python.yaml.
+#
+# java_package_prefix: dev.emet (managed mode) makes sentinel.model.v1 ->
+# dev.emet.sentinel.model.v1 and sentinel.probe.v1 -> dev.emet.sentinel.probe.v1, the packages
+# the hand-written Kotlin imports.
+#
+# Generated Java is NEVER committed, matching sdk/go/gen/ and sdk/python/gen/.
+version: v2
+clean: true
+managed:
+  enabled: true
+  override:
+    - file_option: java_package_prefix
+      value: dev.emet
+inputs:
+  - directory: proto
+plugins:
+  # Same pin as the repo-root buf.gen.yaml Java entry.
+  - remote: buf.build/protocolbuffers/java:v33.4
+    revision: 1
+    out: sdk/jvm/gen

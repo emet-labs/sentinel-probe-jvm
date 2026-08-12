@@ -1,0 +1,7 @@
+# Generated proto types, Gradle caches and build output are never committed; they are
+# reproduced at build time from the locked protos by tools/generate-jvm-sdk.sh.
+gen/
+build/
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
