@@ -47,7 +47,9 @@ public data class TransportOptions(
 // decide performs the actual RPC over the JDK HttpClient with binary protobuf framing. It is
 // the analog of the Go SDK's generated probev1connect.SentinelDecisionServiceClient —
 // hand-written here because no Connect library targets the JVM at this layer.
-public class SentinelTransport(private val options: TransportOptions) {
+public class SentinelTransport(
+    private val options: TransportOptions,
+) {
     private val baseUrl: String = options.baseUrl.trimEnd('/')
     private val client: HttpClient = options.httpClient ?: HttpClient.newHttpClient()
 
@@ -56,12 +58,14 @@ public class SentinelTransport(private val options: TransportOptions) {
     // a Connect error envelope (always JSON) and raised as ConnectError.
     public fun decide(request: DecideRequest): DecideResponse {
         val wire = request.toByteArray()
-        val httpRequest = HttpRequest.newBuilder()
-            .uri(URI.create(baseUrl + DECIDE_PATH))
-            .header("Content-Type", "application/proto")
-            .header("Connect-Protocol-Version", CONNECT_PROTOCOL_VERSION)
-            .POST(HttpRequest.BodyPublishers.ofByteArray(wire))
-            .build()
+        val httpRequest =
+            HttpRequest
+                .newBuilder()
+                .uri(URI.create(baseUrl + DECIDE_PATH))
+                .header("Content-Type", "application/proto")
+                .header("Connect-Protocol-Version", CONNECT_PROTOCOL_VERSION)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(wire))
+                .build()
         val response = client.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray())
         if (response.statusCode() != 200) raiseConnectError(response)
         return DecideResponse.parseFrom(response.body())
@@ -90,7 +94,10 @@ internal fun tryParseConnectError(text: String): Pair<String, String>? {
 // extractJsonString finds the string value for a top-level JSON key via a minimal scan. It only
 // understands flat object bodies with string values, which is the Connect error envelope shape;
 // anything else returns null so the caller treats the body as opaque.
-private fun extractJsonString(text: String, key: String): String? {
+private fun extractJsonString(
+    text: String,
+    key: String,
+): String? {
     val needle = "\"$key\""
     var i = text.indexOf(needle)
     while (i >= 0) {
@@ -108,7 +115,10 @@ private fun extractJsonString(text: String, key: String): String? {
     return null
 }
 
-private fun readJsonString(text: String, startQuote: Int): String {
+private fun readJsonString(
+    text: String,
+    startQuote: Int,
+): String {
     val sb = StringBuilder()
     var k = startQuote + 1
     while (k < text.length) {
@@ -117,16 +127,24 @@ private fun readJsonString(text: String, startQuote: Int): String {
             c == '"' -> return sb.toString()
             c == '\\' && k < text.length -> {
                 val esc = text[k++]
-                sb.append(when (esc) {
-                    '"' -> '"'; '\\' -> '\\'; '/' -> '/'; 'b' -> '\b'
-                    'f' -> '\u000C'; 'n' -> '\n'; 'r' -> '\r'; 't' -> '\t'
-                    'u' -> {
-                        val hex = text.substring(k, minOf(k + 4, text.length))
-                        k += 4
-                        hex.toIntOrNull(16)?.toChar() ?: return sb.toString()
-                    }
-                    else -> esc
-                })
+                sb.append(
+                    when (esc) {
+                        '"' -> '"'
+                        '\\' -> '\\'
+                        '/' -> '/'
+                        'b' -> '\b'
+                        'f' -> '\u000C'
+                        'n' -> '\n'
+                        'r' -> '\r'
+                        't' -> '\t'
+                        'u' -> {
+                            val hex = text.substring(k, minOf(k + 4, text.length))
+                            k += 4
+                            hex.toIntOrNull(16)?.toChar() ?: return sb.toString()
+                        }
+                        else -> esc
+                    },
+                )
             }
             else -> sb.append(c)
         }
@@ -141,8 +159,10 @@ private fun readJsonString(text: String, startQuote: Int): String {
 public fun decideFunc(transport: SentinelTransport): (DecideRequest) -> dev.emet.sentinel.probe.sdk.enforcement.DecideResult =
     { request ->
         try {
-            dev.emet.sentinel.probe.sdk.enforcement.DecideResult.Ok(transport.decide(request))
+            dev.emet.sentinel.probe.sdk.enforcement.DecideResult
+                .Ok(transport.decide(request))
         } catch (t: Throwable) {
-            dev.emet.sentinel.probe.sdk.enforcement.DecideResult.Err(t)
+            dev.emet.sentinel.probe.sdk.enforcement.DecideResult
+                .Err(t)
         }
     }

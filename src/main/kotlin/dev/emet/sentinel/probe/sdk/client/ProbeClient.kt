@@ -61,11 +61,13 @@ public class ProbeClient(
         idempotencyKey: String,
         remainingBudgetNs: Long?,
     ): DecideRequest {
-        val builder = DecideRequest.newBuilder()
-            .setRequestId(requestID)
-            .setIdempotencyKey(idempotencyKey)
-            .setSourceHandle(config.sourceHandle)
-            .setProducerEvent(event)
+        val builder =
+            DecideRequest
+                .newBuilder()
+                .setRequestId(requestID)
+                .setIdempotencyKey(idempotencyKey)
+                .setSourceHandle(config.sourceHandle)
+                .setProducerEvent(event)
         val epoch = store.epoch()
         if (epoch != null) builder.setFilterEpoch(epoch)
         if (remainingBudgetNs != null) builder.setRemainingTransportBudgetNanoseconds(remainingBudgetNs)

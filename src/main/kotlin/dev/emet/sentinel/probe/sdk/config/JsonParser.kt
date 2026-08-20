@@ -8,7 +8,9 @@
 // encoding/json does.
 package dev.emet.sentinel.probe.sdk.config
 
-internal class JsonParser(private val source: String) {
+internal class JsonParser(
+    private val source: String,
+) {
     private var index: Int = 0
 
     fun parseValue(): Any? {
@@ -38,7 +40,10 @@ internal class JsonParser(private val source: String) {
         expect('{')
         val map = LinkedHashMap<String, Any?>()
         skipWhitespace()
-        if (peek() == '}') { index++; return map }
+        if (peek() == '}') {
+            index++
+            return map
+        }
         while (true) {
             skipWhitespace()
             val key = parseString()
@@ -48,8 +53,13 @@ internal class JsonParser(private val source: String) {
             map[key] = value
             skipWhitespace()
             when (peek()) {
-                ',' -> { index++ }
-                '}' -> { index++; return map }
+                ',' -> {
+                    index++
+                }
+                '}' -> {
+                    index++
+                    return map
+                }
                 else -> throw IllegalArgumentException("source-tier: expected ',' or '}' in object at index $index")
             }
         }
@@ -59,13 +69,21 @@ internal class JsonParser(private val source: String) {
         expect('[')
         val list = ArrayList<Any?>()
         skipWhitespace()
-        if (peek() == ']') { index++; return list }
+        if (peek() == ']') {
+            index++
+            return list
+        }
         while (true) {
             list.add(parseValue())
             skipWhitespace()
             when (peek()) {
-                ',' -> { index++ }
-                ']' -> { index++; return list }
+                ',' -> {
+                    index++
+                }
+                ']' -> {
+                    index++
+                    return list
+                }
                 else -> throw IllegalArgumentException("source-tier: expected ',' or ']' in array at index $index")
             }
         }
@@ -81,22 +99,24 @@ internal class JsonParser(private val source: String) {
                 c == '\\' -> {
                     if (index >= source.length) throw IllegalArgumentException("source-tier: unterminated escape in string")
                     val esc = source[index++]
-                    sb.append(when (esc) {
-                        '"' -> '"'
-                        '\\' -> '\\'
-                        '/' -> '/'
-                        'b' -> '\b'
-                        'f' -> '\u000C'
-                        'n' -> '\n'
-                        'r' -> '\r'
-                        't' -> '\t'
-                        'u' -> {
-                            val hex = source.substring(index, index + 4)
-                            index += 4
-                            hex.toInt(16).toChar()
-                        }
-                        else -> throw IllegalArgumentException("source-tier: invalid escape \\$esc in string")
-                    })
+                    sb.append(
+                        when (esc) {
+                            '"' -> '"'
+                            '\\' -> '\\'
+                            '/' -> '/'
+                            'b' -> '\b'
+                            'f' -> '\u000C'
+                            'n' -> '\n'
+                            'r' -> '\r'
+                            't' -> '\t'
+                            'u' -> {
+                                val hex = source.substring(index, index + 4)
+                                index += 4
+                                hex.toInt(16).toChar()
+                            }
+                            else -> throw IllegalArgumentException("source-tier: invalid escape \\$esc in string")
+                        },
+                    )
                 }
                 else -> sb.append(c)
             }
@@ -105,13 +125,22 @@ internal class JsonParser(private val source: String) {
     }
 
     private fun parseBoolean(): Boolean {
-        if (source.startsWith("true", index)) { index += 4; return true }
-        if (source.startsWith("false", index)) { index += 5; return false }
+        if (source.startsWith("true", index)) {
+            index += 4
+            return true
+        }
+        if (source.startsWith("false", index)) {
+            index += 5
+            return false
+        }
         throw IllegalArgumentException("source-tier: invalid literal at index $index")
     }
 
     private fun parseNull(): Any? {
-        if (source.startsWith("null", index)) { index += 4; return null }
+        if (source.startsWith("null", index)) {
+            index += 4
+            return null
+        }
         throw IllegalArgumentException("source-tier: invalid literal at index $index")
     }
 
@@ -140,7 +169,14 @@ internal class JsonParser(private val source: String) {
         return if (isDouble) token.toDouble() else token.toLong()
     }
 
-    private fun peek(): Char = if (index < source.length) source[index] else throw IllegalArgumentException("source-tier: unexpected end of JSON")
+    private fun peek(): Char =
+        if (index <
+            source.length
+        ) {
+            source[index]
+        } else {
+            throw IllegalArgumentException("source-tier: unexpected end of JSON")
+        }
 
     private fun expect(c: Char) {
         if (index >= source.length || source[index] != c) {

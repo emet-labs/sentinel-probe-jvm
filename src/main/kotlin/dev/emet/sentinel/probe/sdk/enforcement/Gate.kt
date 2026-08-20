@@ -18,7 +18,10 @@ import dev.emet.sentinel.probe.v1.SpecificationDecision
 //
 // Pure: no clock access, no side effects. The clock is injected through Deps.nowMonotonicNs
 // and never read inside, so budget behaviour is testable without sleeping.
-public fun remainingTransportBudgetNs(deadlineNs: Long, nowNs: Long): Long {
+public fun remainingTransportBudgetNs(
+    deadlineNs: Long,
+    nowNs: Long,
+): Long {
     val remaining = deadlineNs - nowNs
     return if (remaining <= 0) 0L else remaining
 }
@@ -102,8 +105,13 @@ public data class Deps(
 // with no error models a transport that yielded nothing — the Go nil-safe guard applies the
 // fail mode rather than permit. Kotlin has no multi-return; a sealed result is the honest shape.
 public sealed class DecideResult {
-    public data class Ok(val response: DecideResponse?) : DecideResult()
-    public data class Err(val error: Throwable) : DecideResult()
+    public data class Ok(
+        val response: DecideResponse?,
+    ) : DecideResult()
+
+    public data class Err(
+        val error: Throwable,
+    ) : DecideResult()
 }
 
 // Options carry the per-call identifiers stamped into the DecideRequest.
@@ -144,10 +152,12 @@ public fun gate(
     val filterEpoch: Long = filter.epoch
 
     // 2. Enforcing set: selects the event AND asks-and-blocks.
-    val enforcing = filter.specificationsList.filter { spec ->
-        dev.emet.sentinel.probe.sdk.internal.specmatch.SpecMatch.selects(spec, event) &&
-            isAskAndBlock(spec)
-    }
+    val enforcing =
+        filter.specificationsList.filter { spec ->
+            dev.emet.sentinel.probe.sdk.internal.specmatch.SpecMatch
+                .selects(spec, event) &&
+                isAskAndBlock(spec)
+        }
     if (enforcing.isEmpty()) {
         return GateOutcome.Permit(
             reason = "no-ask-and-block-spec",
@@ -170,12 +180,14 @@ public fun gate(
     }
 
     // 5. Build the request from the already-projected event.
-    val requestBuilder = DecideRequest.newBuilder()
-        .setRequestId(options.requestID)
-        .setIdempotencyKey(options.idempotencyKey)
-        .setSourceHandle(options.sourceHandle)
-        .setFilterEpoch(filterEpoch)
-        .setProducerEvent(event)
+    val requestBuilder =
+        DecideRequest
+            .newBuilder()
+            .setRequestId(options.requestID)
+            .setIdempotencyKey(options.idempotencyKey)
+            .setSourceHandle(options.sourceHandle)
+            .setFilterEpoch(filterEpoch)
+            .setProducerEvent(event)
     if (remainingBudget != null) requestBuilder.setRemainingTransportBudgetNanoseconds(remainingBudget)
     val request = requestBuilder.build()
 
@@ -246,12 +258,13 @@ private fun computeAggregateFailMode(
     enforcing: List<SpecificationFilter>,
     deps: Deps,
 ): FailMode {
-    val accepted = deps.acceptedFailModeFor
-        ?: throw IllegalStateException(
-            "enforcement: Deps.acceptedFailModeFor is required when an enforcing " +
-                "Specification selects the event; a null contract source cannot be defaulted to " +
-                "fail-open without silently disabling fail-closed enforcement",
-        )
+    val accepted =
+        deps.acceptedFailModeFor
+            ?: throw IllegalStateException(
+                "enforcement: Deps.acceptedFailModeFor is required when an enforcing " +
+                    "Specification selects the event; a null contract source cannot be defaulted to " +
+                    "fail-open without silently disabling fail-closed enforcement",
+            )
     for (spec in enforcing) {
         if (spec.failMode != FailMode.FAIL_MODE_CLOSED) continue
         if (accepted(spec) == FailMode.FAIL_MODE_CLOSED) return FailMode.FAIL_MODE_CLOSED

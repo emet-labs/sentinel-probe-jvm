@@ -10,6 +10,7 @@ package dev.emet.sentinel.probe.sdk
 
 import dev.emet.sentinel.model.v1.EventFilter
 import dev.emet.sentinel.model.v1.ProducerEvent
+import dev.emet.sentinel.model.v1.SourceTier
 import dev.emet.sentinel.probe.sdk.config.SourceTierMap
 import dev.emet.sentinel.probe.sdk.config.SourceTiers
 import dev.emet.sentinel.probe.sdk.emission.SpanConversion
@@ -19,13 +20,14 @@ import dev.emet.sentinel.probe.sdk.enforcement.Options
 import dev.emet.sentinel.probe.sdk.enforcement.gate
 import dev.emet.sentinel.probe.sdk.filter.ApplyFilter
 import dev.emet.sentinel.probe.sdk.ids.ProbeIds
-import dev.emet.sentinel.model.v1.SourceTier
 
 public object SentinelProbeSdk {
     // applyFilter projects event against filter (ADR-0006 relevance projection). Delegates to
     // filter.ApplyFilter; returns null when no Specification selects the event.
-    public fun applyFilter(event: ProducerEvent?, filter: EventFilter?): ProducerEvent? =
-        ApplyFilter.apply(event, filter)
+    public fun applyFilter(
+        event: ProducerEvent?,
+        filter: EventFilter?,
+    ): ProducerEvent? = ApplyFilter.apply(event, filter)
 
     // gate enforces one ASK_AND_BLOCK event. Delegates to enforcement.gate.
     public fun gate(
@@ -39,15 +41,19 @@ public object SentinelProbeSdk {
     // spanToEvent converts an ended OTel span into a ProducerEvent. Delegates to
     // emission.spanToEvent.
     public fun spanToEvent(conversion: SpanConversion): ProducerEvent =
-        dev.emet.sentinel.probe.sdk.emission.spanToEvent(conversion)
+        dev.emet.sentinel.probe.sdk.emission
+            .spanToEvent(conversion)
 
     // newRequestID and newIdempotencyKey generate the per-call UUIDv4 identifiers a Probe
     // stamps into decision requests. Delegates to ids.ProbeIds.
     public fun newRequestID(): String = ProbeIds.generateRequestID()
+
     public fun newIdempotencyKey(): String = ProbeIds.generateIdempotencyKey()
 
     // tierForHandle resolves the proto SourceTier for a source_handle. Delegates to
     // config.SourceTiers; throws IllegalArgumentException for an undeclared or unknown tier.
-    public fun tierForHandle(config: SourceTierMap, sourceHandle: String): SourceTier =
-        SourceTiers.tierForHandle(config, sourceHandle)
+    public fun tierForHandle(
+        config: SourceTierMap,
+        sourceHandle: String,
+    ): SourceTier = SourceTiers.tierForHandle(config, sourceHandle)
 }

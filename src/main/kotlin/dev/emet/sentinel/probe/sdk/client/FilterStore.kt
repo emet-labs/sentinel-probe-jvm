@@ -21,7 +21,9 @@ import java.util.concurrent.atomic.AtomicReference
 // than a convention.
 //
 // The zero-constructed store is a usable, empty store. All methods are safe for concurrent use.
-public class FilterStore internal constructor(initial: EventFilter?) {
+public class FilterStore internal constructor(
+    initial: EventFilter?,
+) {
     // AtomicReference<EventFilter?> is the direct analog of Go's atomic.Pointer[EventFilter].
     private val current: AtomicReference<EventFilter?> = AtomicReference(initial)
 
@@ -82,7 +84,10 @@ public class FilterStore internal constructor(initial: EventFilter?) {
 // value (unlike Go's pointer comparison trap), but the helper is kept to mirror the reference's
 // explicitness and to document that two distinct boxed Longs holding the same value compare
 // equal here.
-private fun equalEpoch(a: Long?, b: Long?): Boolean = a == b
+private fun equalEpoch(
+    a: Long?,
+    b: Long?,
+): Boolean = a == b
 
 // epochOf is null-safe on the message itself, unlike the generated getEpoch, which flattens an
 // absent epoch to 0.

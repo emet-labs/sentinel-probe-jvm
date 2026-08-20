@@ -26,44 +26,59 @@ class ApplyFilterPropertyTests {
     private val attrKey: Arb<String> = Arb.string(1, 4)
     private val kind: Arb<String> = Arb.of(listOf("transfer.initiated", "approval.granted", "order.placed", "x"))
 
-    private fun stringAttr(key: String, value: String): AttributeEntry =
-        AttributeEntry.newBuilder()
+    private fun stringAttr(
+        key: String,
+        value: String,
+    ): AttributeEntry =
+        AttributeEntry
+            .newBuilder()
             .setKey(key)
             .setValue(AttributeValue.newBuilder().setStringValue(value).build())
             .build()
 
-    private val event: Arb<ProducerEvent> = Arb.bind(
-        Arb.list(attrKey, 0..4),
-        Arb.list(kind, 1..2),
-    ) { keys, predecessors ->
-        val distinctKeys = keys.distinct()
-        ProducerEvent.newBuilder()
-            .setId("evt")
-            .setKind(if (predecessors.isNotEmpty()) predecessors.first() else "x")
-            .setSchemaVersion("sentinel.model.v1")
-            .addAllAttributes(distinctKeys.mapIndexed { i, k -> stringAttr(k, "v$i") })
-            .addAllCausalPredecessorIds(predecessors)
-            .build()
-    }
+    private val event: Arb<ProducerEvent> =
+        Arb.bind(
+            Arb.list(attrKey, 0..4),
+            Arb.list(kind, 1..2),
+        ) { keys, predecessors ->
+            val distinctKeys = keys.distinct()
+            ProducerEvent
+                .newBuilder()
+                .setId("evt")
+                .setKind(if (predecessors.isNotEmpty()) predecessors.first() else "x")
+                .setSchemaVersion("sentinel.model.v1")
+                .addAllAttributes(distinctKeys.mapIndexed { i, k -> stringAttr(k, "v$i") })
+                .addAllCausalPredecessorIds(predecessors)
+                .build()
+        }
 
-    private val filter: Arb<EventFilter> = Arb.bind(
-        Arb.list(kind, 0..3),
-        Arb.list(attrKey, 0..3),
-    ) { kinds, projected ->
-        val spec = SpecificationFilter.newBuilder()
-            .setEventMatch(
-                EventMatch.newBuilder()
-                    .addAllEventKinds(kinds.distinct())
-                    .addAllProjectedAttributeKeys(projected.distinct())
-                    .setDeliveryMode(DeliveryMode.DELIVERY_MODE_SHIP_ASYNC)
-                    .build(),
-            )
-            .build()
-        EventFilter.newBuilder().setEpoch(5L).addSpecifications(spec).build()
-    }
+    private val filter: Arb<EventFilter> =
+        Arb.bind(
+            Arb.list(kind, 0..3),
+            Arb.list(attrKey, 0..3),
+        ) { kinds, projected ->
+            val spec =
+                SpecificationFilter
+                    .newBuilder()
+                    .setEventMatch(
+                        EventMatch
+                            .newBuilder()
+                            .addAllEventKinds(kinds.distinct())
+                            .addAllProjectedAttributeKeys(projected.distinct())
+                            .setDeliveryMode(DeliveryMode.DELIVERY_MODE_SHIP_ASYNC)
+                            .build(),
+                    ).build()
+            EventFilter
+                .newBuilder()
+                .setEpoch(5L)
+                .addSpecifications(spec)
+                .build()
+        }
 
-    private fun selects(eventKind: String, specKinds: List<String>): Boolean =
-        specKinds.isEmpty() || specKinds.contains(eventKind)
+    private fun selects(
+        eventKind: String,
+        specKinds: List<String>,
+    ): Boolean = specKinds.isEmpty() || specKinds.contains(eventKind)
 
     @Test
     fun `projection is sound - preserves kind, causal edges and selected attributes`() {
@@ -76,12 +91,15 @@ class ApplyFilterPropertyTests {
                 val kinds = spec.eventMatch.eventKindsList
                 val projected = spec.eventMatch.projectedAttributeKeysList
                 if (!selects(e.kind, kinds)) {
-                    org.junit.jupiter.api.Assertions.assertNull(got, "non-selecting spec must drop")
+                    org.junit.jupiter.api.Assertions
+                        .assertNull(got, "non-selecting spec must drop")
                     return@checkAll
                 }
-                org.junit.jupiter.api.Assertions.assertNotNull(got, "selecting spec must not drop")
+                org.junit.jupiter.api.Assertions
+                    .assertNotNull(got, "selecting spec must not drop")
                 val out = got!!
-                org.junit.jupiter.api.Assertions.assertEquals(e.kind, out.kind)
+                org.junit.jupiter.api.Assertions
+                    .assertEquals(e.kind, out.kind)
                 org.junit.jupiter.api.Assertions.assertEquals(
                     e.causalPredecessorIdsList,
                     out.causalPredecessorIdsList,
@@ -91,12 +109,14 @@ class ApplyFilterPropertyTests {
                 if (projected.isEmpty()) {
                     // keep-everything: every input attribute must survive.
                     for (entry in e.attributesList) {
-                        org.junit.jupiter.api.Assertions.assertTrue(entry.key in byKey, "keep-everything lost ${entry.key}")
+                        org.junit.jupiter.api.Assertions
+                            .assertTrue(entry.key in byKey, "keep-everything lost ${entry.key}")
                     }
                 } else {
                     for (key in projected) {
                         if (e.attributesList.any { it.key == key }) {
-                            org.junit.jupiter.api.Assertions.assertTrue(key in byKey, "projected key $key was trimmed")
+                            org.junit.jupiter.api.Assertions
+                                .assertTrue(key in byKey, "projected key $key was trimmed")
                         }
                     }
                 }
@@ -110,7 +130,8 @@ class ApplyFilterPropertyTests {
             checkAll(config, event, filter) { e, f ->
                 val got = ApplyFilter.apply(e, f)
                 if (got != null) {
-                    org.junit.jupiter.api.Assertions.assertEquals(e.causalPredecessorIdsList, got.causalPredecessorIdsList)
+                    org.junit.jupiter.api.Assertions
+                        .assertEquals(e.causalPredecessorIdsList, got.causalPredecessorIdsList)
                 }
             }
         }

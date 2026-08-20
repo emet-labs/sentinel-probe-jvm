@@ -19,7 +19,10 @@ internal object SpecMatch {
     // The generated null-safe getters give this the optional-chaining semantics of
     // apply-filter.ts:77-81 for free: a null spec is treated as "selects everything" (a null
     // EventMatch yields an empty event_kinds list), and a null event yields an empty kind.
-    internal fun selects(spec: SpecificationFilter?, event: ProducerEvent?): Boolean {
+    internal fun selects(
+        spec: SpecificationFilter?,
+        event: ProducerEvent?,
+    ): Boolean {
         val kinds = spec?.eventMatch?.eventKindsList ?: emptyList()
         if (kinds.isEmpty()) return true
         return kinds.contains(event?.kind ?: "")

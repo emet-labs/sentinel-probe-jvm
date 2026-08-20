@@ -24,23 +24,24 @@ import kotlin.test.fail
 // JSON). This is the JVM analog of sdk/python/tests/test_transport.py.
 class TransportTests {
     private fun makeRequest(): DecideRequest =
-        DecideRequest.newBuilder()
+        DecideRequest
+            .newBuilder()
             .setRequestId("req-1")
             .setIdempotencyKey("idem-1")
             .setSourceHandle("gateway.tool-calls")
             .setProducerEvent(
-                ProducerEvent.newBuilder()
+                ProducerEvent
+                    .newBuilder()
                     .setId("evt-1")
                     .setKind("transfer.initiated")
                     .addAttributes(
-                        AttributeEntry.newBuilder()
+                        AttributeEntry
+                            .newBuilder()
                             .setKey("sagashop.order.id")
                             .setValue(AttributeValue.newBuilder().setStringValue("ord-9").build())
                             .build(),
-                    )
-                    .build(),
-            )
-            .build()
+                    ).build(),
+            ).build()
 
     private class CapturingContext {
         var contentType: String? = null
@@ -61,7 +62,10 @@ class TransportTests {
         return server
     }
 
-    private fun sendProto(exchange: HttpExchange, response: DecideResponse) {
+    private fun sendProto(
+        exchange: HttpExchange,
+        response: DecideResponse,
+    ) {
         val bytes = response.toByteArray()
         exchange.responseHeaders.set("Content-Type", "application/proto")
         exchange.sendResponseHeaders(200, bytes.size.toLong())
@@ -69,7 +73,11 @@ class TransportTests {
         exchange.responseBody.close()
     }
 
-    private fun sendError(exchange: HttpExchange, status: Int, body: String) {
+    private fun sendError(
+        exchange: HttpExchange,
+        status: Int,
+        body: String,
+    ) {
         val bytes = body.toByteArray(Charsets.UTF_8)
         exchange.responseHeaders.set("Content-Type", "application/json")
         exchange.sendResponseHeaders(status, bytes.size.toLong())
@@ -116,10 +124,12 @@ class TransportTests {
     fun `decodes a binary protobuf response`() {
         val ctx = CapturingContext()
         val server = httpServer(ctx)
-        val canned = DecideResponse.newBuilder()
-            .setRequestId("r")
-            .setAction(DecisionAction.DECISION_ACTION_DENY)
-            .build()
+        val canned =
+            DecideResponse
+                .newBuilder()
+                .setRequestId("r")
+                .setAction(DecisionAction.DECISION_ACTION_DENY)
+                .build()
         ctx.statusHandler = { sendProto(it, canned) }
         try {
             val response = SentinelTransport(TransportOptions(baseUrl = "http://127.0.0.1:${server.address.port}")).decide(makeRequest())

@@ -9,9 +9,9 @@ import dev.emet.sentinel.model.v1.FailMode
 import dev.emet.sentinel.model.v1.ProducerEvent
 import dev.emet.sentinel.model.v1.SourceCapability
 import dev.emet.sentinel.model.v1.SourceTier
-import dev.emet.sentinel.probe.v1.DecisionAction
 import dev.emet.sentinel.probe.v1.DecideRequest
 import dev.emet.sentinel.probe.v1.DecideResponse
+import dev.emet.sentinel.probe.v1.DecisionAction
 import dev.emet.sentinel.probe.v1.SpecificationDecision
 import dev.emet.sentinel.probe.v1.UnresolvedReason
 import org.junit.jupiter.api.Test
@@ -28,31 +28,38 @@ class CodegenSmokeTests {
     @Test
     fun `generated messages round-trip through binary protobuf`() {
         val epoch = 7L
-        val req = DecideRequest.newBuilder()
-            .setRequestId("req-9")
-            .setIdempotencyKey("idem-9")
-            .setSourceHandle("gateway.tool-calls")
-            .setFilterEpoch(epoch)
-            .setProducerEvent(
-                ProducerEvent.newBuilder()
-                    .setId("evt-9")
-                    .setKind("transfer.initiated")
-                    .setSchemaVersion("sentinel.model.v1")
-                    .addAttributes(
-                        AttributeEntry.newBuilder()
-                            .setKey("sagashop.order.id")
-                            .setValue(AttributeValue.newBuilder().setStringValue("ord-9").build())
-                            .build(),
-                    )
-                    .build(),
-            )
-            .setRemainingTransportBudgetNanoseconds(1234L)
-            .build()
+        val req =
+            DecideRequest
+                .newBuilder()
+                .setRequestId("req-9")
+                .setIdempotencyKey("idem-9")
+                .setSourceHandle("gateway.tool-calls")
+                .setFilterEpoch(epoch)
+                .setProducerEvent(
+                    ProducerEvent
+                        .newBuilder()
+                        .setId("evt-9")
+                        .setKind("transfer.initiated")
+                        .setSchemaVersion("sentinel.model.v1")
+                        .addAttributes(
+                            AttributeEntry
+                                .newBuilder()
+                                .setKey("sagashop.order.id")
+                                .setValue(AttributeValue.newBuilder().setStringValue("ord-9").build())
+                                .build(),
+                        ).build(),
+                ).setRemainingTransportBudgetNanoseconds(1234L)
+                .build()
 
         val wire = req.toByteArray()
         val got = DecideRequest.parseFrom(wire)
         assertEquals(req, got, "binary protobuf round-trip mismatch")
-        assertEquals("ord-9", got.producerEvent.attributesList[0].value.stringValue, "nested attribute must survive")
+        assertEquals(
+            "ord-9",
+            got.producerEvent.attributesList[0]
+                .value.stringValue,
+            "nested attribute must survive",
+        )
         assertEquals(epoch, got.filterEpoch)
     }
 
@@ -95,19 +102,21 @@ class CodegenSmokeTests {
     @Test
     fun `decide response carries specification decisions with unresolved reasons`() {
         val reason = UnresolvedReason.UNRESOLVED_REASON_TIMEOUT
-        val resp = DecideResponse.newBuilder()
-            .setRequestId("r")
-            .setAction(DecisionAction.DECISION_ACTION_DEFER)
-            .addSpecifications(
-                SpecificationDecision.newBuilder()
-                    .setSpecificationId("spec-1")
-                    .setSpecificationVersion("1.0.0")
-                    .setAction(DecisionAction.DECISION_ACTION_DEFER)
-                    .setFailMode(FailMode.FAIL_MODE_CLOSED)
-                    .setUnresolvedReason(reason)
-                    .build(),
-            )
-            .build()
+        val resp =
+            DecideResponse
+                .newBuilder()
+                .setRequestId("r")
+                .setAction(DecisionAction.DECISION_ACTION_DEFER)
+                .addSpecifications(
+                    SpecificationDecision
+                        .newBuilder()
+                        .setSpecificationId("spec-1")
+                        .setSpecificationVersion("1.0.0")
+                        .setAction(DecisionAction.DECISION_ACTION_DEFER)
+                        .setFailMode(FailMode.FAIL_MODE_CLOSED)
+                        .setUnresolvedReason(reason)
+                        .build(),
+                ).build()
         val round = DecideResponse.parseFrom(resp.toByteArray())
         assertEquals(1, round.specificationsList.size)
         val decision = round.specificationsList[0]

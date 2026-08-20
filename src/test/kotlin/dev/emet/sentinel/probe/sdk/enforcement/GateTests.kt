@@ -6,12 +6,12 @@ import dev.emet.sentinel.model.v1.EventMatch
 import dev.emet.sentinel.model.v1.FailMode
 import dev.emet.sentinel.model.v1.ProducerEvent
 import dev.emet.sentinel.model.v1.SpecificationFilter
+import dev.emet.sentinel.probe.sdk.client.ConnectError
 import dev.emet.sentinel.probe.v1.DecideRequest
+import dev.emet.sentinel.probe.v1.DecideResponse
 import dev.emet.sentinel.probe.v1.DecisionAction
 import dev.emet.sentinel.probe.v1.SpecificationDecision
 import dev.emet.sentinel.probe.v1.UnresolvedReason
-import dev.emet.sentinel.probe.v1.DecideResponse
-import dev.emet.sentinel.probe.sdk.client.ConnectError
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.util.concurrent.TimeoutException
@@ -23,17 +23,24 @@ import kotlin.test.assertTrue
 class GateTests {
     private val testKind = "transfer.initiated"
     private val testEpoch = 5L
-    private val testOptions = Options(
-        sourceHandle = "gateway.tool-calls",
-        requestID = "req-1",
-        idempotencyKey = "idem-1",
-    )
+    private val testOptions =
+        Options(
+            sourceHandle = "gateway.tool-calls",
+            requestID = "req-1",
+            idempotencyKey = "idem-1",
+        )
 
     private fun u64(v: Long): Long = v
+
     private fun i64(v: Long): Long = v
 
     private fun makeEvent(kind: String): ProducerEvent =
-        ProducerEvent.newBuilder().setId("evt-1").setKind(kind).setSchemaVersion("sentinel.model.v1").build()
+        ProducerEvent
+            .newBuilder()
+            .setId("evt-1")
+            .setKind(kind)
+            .setSchemaVersion("sentinel.model.v1")
+            .build()
 
     private fun makeSpec(
         specificationID: String,
@@ -41,16 +48,17 @@ class GateTests {
         failMode: FailMode,
         deliveryMode: DeliveryMode,
     ): SpecificationFilter =
-        SpecificationFilter.newBuilder()
+        SpecificationFilter
+            .newBuilder()
             .setSpecificationId(specificationID)
             .setSpecificationVersion("1.0.0")
             .setEventMatch(
-                EventMatch.newBuilder()
+                EventMatch
+                    .newBuilder()
                     .addAllEventKinds(kinds)
                     .setDeliveryMode(deliveryMode)
                     .build(),
-            )
-            .setFailMode(failMode)
+            ).setFailMode(failMode)
             .build()
 
     private fun askAndBlockSpec(): SpecificationFilter =
@@ -62,7 +70,10 @@ class GateTests {
     private fun shipAsyncSpec(): SpecificationFilter =
         makeSpec("spec-1", listOf(testKind), FailMode.FAIL_MODE_OPEN, DeliveryMode.DELIVERY_MODE_SHIP_ASYNC)
 
-    private fun makeFilter(epoch: Long?, vararg specs: SpecificationFilter): EventFilter {
+    private fun makeFilter(
+        epoch: Long?,
+        vararg specs: SpecificationFilter,
+    ): EventFilter {
         val b = EventFilter.newBuilder().addAllSpecifications(specs.toList())
         if (epoch != null) b.setEpoch(epoch)
         return b.build()
@@ -75,23 +86,34 @@ class GateTests {
         mock: MockDecider,
         nowNs: Long,
         accepted: ((SpecificationFilter) -> FailMode)? = alwaysOpen,
-    ): Deps = Deps(
-        decide = mock::decide,
-        nowMonotonicNs = { nowNs },
-        acceptedFailModeFor = accepted,
-    )
+    ): Deps =
+        Deps(
+            decide = mock::decide,
+            nowMonotonicNs = { nowNs },
+            acceptedFailModeFor = accepted,
+        )
 
-    private fun makeResponse(action: DecisionAction, vararg decisions: SpecificationDecision) =
-        dev.emet.sentinel.probe.v1.DecideResponse.newBuilder()
-            .setRequestId("mock").setAction(action).addAllSpecifications(decisions.toList()).build()
+    private fun makeResponse(
+        action: DecisionAction,
+        vararg decisions: SpecificationDecision,
+    ) = dev.emet.sentinel.probe.v1.DecideResponse
+        .newBuilder()
+        .setRequestId("mock")
+        .setAction(action)
+        .addAllSpecifications(decisions.toList())
+        .build()
 
-    private fun makeDecision(specID: String, action: DecisionAction, unresolved: UnresolvedReason? = null) =
-        SpecificationDecision.newBuilder()
-            .setSpecificationId(specID)
-            .setSpecificationVersion("1.0.0")
-            .setAction(action)
-            .also { if (unresolved != null) it.setUnresolvedReason(unresolved) }
-            .build()
+    private fun makeDecision(
+        specID: String,
+        action: DecisionAction,
+        unresolved: UnresolvedReason? = null,
+    ) = SpecificationDecision
+        .newBuilder()
+        .setSpecificationId(specID)
+        .setSpecificationVersion("1.0.0")
+        .setAction(action)
+        .also { if (unresolved != null) it.setUnresolvedReason(unresolved) }
+        .build()
 
     @Test
     fun `permit`() {
@@ -123,10 +145,11 @@ class GateTests {
         // The clock advances between entry and response, so the post-response budget check sees 0.
         val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_DEFER))
         var calls = 0
-        val deps = makeDeps(mock, 0).copy(nowMonotonicNs = {
-            calls++
-            if (calls == 1) 0L else 10000L // entry: budget remains; after response: budget gone
-        })
+        val deps =
+            makeDeps(mock, 0).copy(nowMonotonicNs = {
+                calls++
+                if (calls == 1) 0L else 10000L // entry: budget remains; after response: budget gone
+            })
         val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), deps, testOptions)
         assertTrue(outcome is GateOutcome.FailOpenPermit)
         assertEquals("defer-budget-exhausted", outcome.reason)
@@ -136,10 +159,11 @@ class GateTests {
     @Test
     fun `defer budget exhausted fails closed when contracted`() {
         val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_DEFER))
-        val deps = makeDeps(mock, 0, alwaysClosed).copy(nowMonotonicNs = {
-            // First call returns 0 (entry), subsequent return 10000 (after response).
-            if (mock.callCount() == 0) 0L else 10000L
-        })
+        val deps =
+            makeDeps(mock, 0, alwaysClosed).copy(nowMonotonicNs = {
+                // First call returns 0 (entry), subsequent return 10000 (after response).
+                if (mock.callCount() == 0) 0L else 10000L
+            })
         val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), closedAskAndBlockSpec()), i64(10000), deps, testOptions)
         assertTrue(outcome is GateOutcome.FailClosedDeny)
     }
@@ -155,7 +179,14 @@ class GateTests {
     @Test
     fun `transport error fails closed when contracted`() {
         val mock = MockDecider(error = RuntimeException("connection refused"))
-        val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), closedAskAndBlockSpec()), i64(10000), makeDeps(mock, 0, alwaysClosed), testOptions)
+        val outcome =
+            gate(
+                makeEvent(testKind),
+                makeFilter(u64(testEpoch), closedAskAndBlockSpec()),
+                i64(10000),
+                makeDeps(mock, 0, alwaysClosed),
+                testOptions,
+            )
         assertTrue(outcome is GateOutcome.FailClosedDeny)
     }
 
@@ -164,7 +195,14 @@ class GateTests {
         // Declaring CLOSED is not enough. An operator has to have agreed to be blocked,
         // otherwise the mode downgrades to OPEN.
         val mock = MockDecider(error = RuntimeException("connection refused"))
-        val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), closedAskAndBlockSpec()), i64(10000), makeDeps(mock, 0, alwaysOpen), testOptions)
+        val outcome =
+            gate(
+                makeEvent(testKind),
+                makeFilter(u64(testEpoch), closedAskAndBlockSpec()),
+                i64(10000),
+                makeDeps(mock, 0, alwaysOpen),
+                testOptions,
+            )
         assertTrue(outcome is GateOutcome.FailOpenPermit, "declared CLOSED, contract not accepted -> downgrade to fail-open")
     }
 
@@ -174,9 +212,10 @@ class GateTests {
         // "nothing accepted" would make it the only dependency whose absence WEAKENS enforcement.
         val mock = MockDecider(error = RuntimeException("boom"))
         val deps = Deps(decide = mock::decide, nowMonotonicNs = { 0L }, acceptedFailModeFor = null)
-        val ex = assertThrows<IllegalStateException> {
-            gate(makeEvent(testKind), makeFilter(u64(testEpoch), closedAskAndBlockSpec()), i64(10000), deps, testOptions)
-        }
+        val ex =
+            assertThrows<IllegalStateException> {
+                gate(makeEvent(testKind), makeFilter(u64(testEpoch), closedAskAndBlockSpec()), i64(10000), deps, testOptions)
+            }
         assertTrue(ex.message!!.contains("Deps.acceptedFailModeFor is required"))
     }
 
@@ -192,12 +231,13 @@ class GateTests {
     fun `aggregate fail closed wins`() {
         // One contracted-closed spec among many open ones decides the aggregate.
         val mock = MockDecider(error = RuntimeException("down"))
-        val filter = makeFilter(
-            u64(testEpoch),
-            makeSpec("open-1", listOf(testKind), FailMode.FAIL_MODE_OPEN, DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK),
-            makeSpec("open-2", listOf(testKind), FailMode.FAIL_MODE_OPEN, DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK),
-            closedAskAndBlockSpec(),
-        )
+        val filter =
+            makeFilter(
+                u64(testEpoch),
+                makeSpec("open-1", listOf(testKind), FailMode.FAIL_MODE_OPEN, DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK),
+                makeSpec("open-2", listOf(testKind), FailMode.FAIL_MODE_OPEN, DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK),
+                closedAskAndBlockSpec(),
+            )
         val outcome = gate(makeEvent(testKind), filter, i64(10000), makeDeps(mock, 0, alwaysClosed), testOptions)
         assertTrue(outcome is GateOutcome.FailClosedDeny)
     }
@@ -231,7 +271,8 @@ class GateTests {
     @Test
     fun `budget exhausted skips decide`() {
         val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_PERMIT))
-        val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), makeDeps(mock, 10000), testOptions)
+        val outcome =
+            gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), makeDeps(mock, 10000), testOptions)
         assertTrue(outcome is GateOutcome.FailOpenPermit)
         assertEquals("budget-exhausted", outcome.reason)
         assertEquals(0, mock.callCount())
@@ -240,7 +281,8 @@ class GateTests {
     @Test
     fun `budget already past deadline skips decide`() {
         val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_PERMIT))
-        val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), makeDeps(mock, 10001), testOptions)
+        val outcome =
+            gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), makeDeps(mock, 10001), testOptions)
         assertTrue(outcome is GateOutcome.FailOpenPermit)
         assertEquals(0, mock.callCount())
     }
@@ -255,7 +297,14 @@ class GateTests {
     @Test
     fun `unspecified action fails closed when contracted`() {
         val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_UNSPECIFIED))
-        val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), closedAskAndBlockSpec()), i64(10000), makeDeps(mock, 0, alwaysClosed), testOptions)
+        val outcome =
+            gate(
+                makeEvent(testKind),
+                makeFilter(u64(testEpoch), closedAskAndBlockSpec()),
+                i64(10000),
+                makeDeps(mock, 0, alwaysClosed),
+                testOptions,
+            )
         assertTrue(outcome is GateOutcome.FailClosedDeny)
     }
 
@@ -264,7 +313,11 @@ class GateTests {
         // A future DecisionAction this Probe does not understand is unresolved, not permitted.
         // Java protobuf enums throw on UNRECOGNIZED, so construct the response via raw bytes:
         // field 2 (action) varint value 99, which is not a known DecisionAction.
-        val unknownActionResponse = DecideResponse.parseFrom(com.google.protobuf.ByteString.copyFrom(byteArrayOf(0x10, 0x63)))
+        val unknownActionResponse =
+            DecideResponse.parseFrom(
+                com.google.protobuf.ByteString
+                    .copyFrom(byteArrayOf(0x10, 0x63)),
+            )
         val mock = MockDecider(response = unknownActionResponse)
         val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), makeDeps(mock, 0), testOptions)
         assertTrue(outcome is GateOutcome.FailOpenPermit)
@@ -332,7 +385,13 @@ class GateTests {
     @Test
     fun `request carries identifiers and event`() {
         val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_PERMIT))
-        val event = ProducerEvent.newBuilder().setId("evt-9").setKind(testKind).setSchemaVersion("v1").build()
+        val event =
+            ProducerEvent
+                .newBuilder()
+                .setId("evt-9")
+                .setKind(testKind)
+                .setSchemaVersion("v1")
+                .build()
         gate(event, makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), makeDeps(mock, 0), testOptions)
         val request = mock.lastRequest()!!
         assertEquals("req-1", request.requestId)
@@ -345,14 +404,24 @@ class GateTests {
     @Test
     fun `audits filter epoch in every outcome`() {
         val epoch = 42L
-        data class Case(val name: String, val mock: MockDecider, val wantKind: kotlin.reflect.KClass<out GateOutcome>)
-        val cases = listOf(
-            Case("permit", MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_PERMIT)), GateOutcome.Permit::class),
-            Case("deny", MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_DENY)), GateOutcome.Deny::class),
-            Case("defer", MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_DEFER)), GateOutcome.Defer::class),
-            Case("unspecified", MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_UNSPECIFIED)), GateOutcome.FailOpenPermit::class),
-            Case("transport error", MockDecider(error = RuntimeException("boom")), GateOutcome.FailOpenPermit::class),
+
+        data class Case(
+            val name: String,
+            val mock: MockDecider,
+            val wantKind: kotlin.reflect.KClass<out GateOutcome>,
         )
+        val cases =
+            listOf(
+                Case("permit", MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_PERMIT)), GateOutcome.Permit::class),
+                Case("deny", MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_DENY)), GateOutcome.Deny::class),
+                Case("defer", MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_DEFER)), GateOutcome.Defer::class),
+                Case(
+                    "unspecified",
+                    MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_UNSPECIFIED)),
+                    GateOutcome.FailOpenPermit::class,
+                ),
+                Case("transport error", MockDecider(error = RuntimeException("boom")), GateOutcome.FailOpenPermit::class),
+            )
         for (c in cases) {
             val outcome = gate(makeEvent(testKind), makeFilter(epoch, askAndBlockSpec()), i64(10000), makeDeps(c.mock, 0), testOptions)
             assertEquals(epoch, outcome.filterEpoch, "${c.name}: FilterEpoch must be audited")
@@ -364,12 +433,14 @@ class GateTests {
     @Test
     fun `surfaces specification decisions`() {
         val reason = UnresolvedReason.UNRESOLVED_REASON_EVIDENCE_GAP
-        val mock = MockDecider(
-            response = makeResponse(
-                DecisionAction.DECISION_ACTION_DEFER,
-                makeDecision("spec-1", DecisionAction.DECISION_ACTION_DEFER, reason),
-            ),
-        )
+        val mock =
+            MockDecider(
+                response =
+                    makeResponse(
+                        DecisionAction.DECISION_ACTION_DEFER,
+                        makeDecision("spec-1", DecisionAction.DECISION_ACTION_DEFER, reason),
+                    ),
+            )
         val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), makeDeps(mock, 0), testOptions)
         assertTrue(outcome is GateOutcome.Defer)
         assertEquals(1, outcome.specifications.size)
@@ -381,12 +452,14 @@ class GateTests {
     @Test
     fun `surfaces specification decisions on a fail-mode outcome`() {
         val reason = UnresolvedReason.UNRESOLVED_REASON_TIMEOUT
-        val mock = MockDecider(
-            response = makeResponse(
-                DecisionAction.DECISION_ACTION_UNSPECIFIED,
-                makeDecision("spec-1", DecisionAction.DECISION_ACTION_UNSPECIFIED, reason),
-            ),
-        )
+        val mock =
+            MockDecider(
+                response =
+                    makeResponse(
+                        DecisionAction.DECISION_ACTION_UNSPECIFIED,
+                        makeDecision("spec-1", DecisionAction.DECISION_ACTION_UNSPECIFIED, reason),
+                    ),
+            )
         val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), makeDeps(mock, 0), testOptions)
         assertTrue(outcome is GateOutcome.FailOpenPermit)
         assertEquals(1, outcome.specifications.size)

@@ -11,8 +11,8 @@ package dev.emet.sentinel.probe.sdk.emission
 
 import io.opentelemetry.context.Context
 import io.opentelemetry.sdk.common.CompletableResultCode
-import io.opentelemetry.sdk.trace.ReadableSpan
 import io.opentelemetry.sdk.trace.ReadWriteSpan
+import io.opentelemetry.sdk.trace.ReadableSpan
 import io.opentelemetry.sdk.trace.SpanProcessor
 import io.opentelemetry.sdk.trace.data.SpanData
 
@@ -23,7 +23,10 @@ public class ProbeSpanProcessor(
     // network: the enforcement gate's injected decide dependency is where blocking work belongs.
     private val onEnd: (span: SpanData) -> Unit,
 ) : SpanProcessor {
-    override fun onStart(context: Context, parentSpan: ReadWriteSpan) {
+    override fun onStart(
+        context: Context,
+        parentSpan: ReadWriteSpan,
+    ) {
         // No-op: emission is an end-of-span concern.
     }
 
@@ -36,6 +39,7 @@ public class ProbeSpanProcessor(
     }
 
     override fun isEndRequired(): Boolean = true
+
     override fun shutdown(): CompletableResultCode = CompletableResultCode.ofSuccess()
 
     override fun forceFlush(): CompletableResultCode = CompletableResultCode.ofSuccess()

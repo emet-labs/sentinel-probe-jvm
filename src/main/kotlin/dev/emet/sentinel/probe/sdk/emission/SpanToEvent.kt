@@ -52,9 +52,9 @@ import dev.emet.sentinel.model.v1.AttributeMap
 import dev.emet.sentinel.model.v1.AttributeValue
 import dev.emet.sentinel.model.v1.OccurrenceTime
 import dev.emet.sentinel.model.v1.ProducerEvent
+import dev.emet.sentinel.model.v1.Sensitivity
 import dev.emet.sentinel.model.v1.SequenceCoordinate
 import dev.emet.sentinel.model.v1.SourceCapability
-import dev.emet.sentinel.model.v1.Sensitivity
 import dev.emet.sentinel.probe.sdk.int128.Int128Codec
 import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.common.AttributeType
@@ -108,14 +108,16 @@ public data class SpanConversion(
 // come from the parent and link attributes described in the package doc.
 public fun spanToEvent(conversion: SpanConversion): ProducerEvent {
     val span = conversion.span
-    val builder = ProducerEvent.newBuilder()
-        .setId(conversion.eventID)
-        .setSchemaVersion(conversion.schemaVersion)
-        .setKind(span.name)
-        .setOccurrenceTime(buildOccurrenceTime(span))
-        .addAllAttributes(mapAttributes(span.attributes))
-        .setClaimedSensitivity(conversion.claimedSensitivity)
-        .addAllCausalPredecessorIds(collectCausalPredecessors(span, conversion.onMalformedLink))
+    val builder =
+        ProducerEvent
+            .newBuilder()
+            .setId(conversion.eventID)
+            .setSchemaVersion(conversion.schemaVersion)
+            .setKind(span.name)
+            .setOccurrenceTime(buildOccurrenceTime(span))
+            .addAllAttributes(mapAttributes(span.attributes))
+            .setClaimedSensitivity(conversion.claimedSensitivity)
+            .addAllCausalPredecessorIds(collectCausalPredecessors(span, conversion.onMalformedLink))
     if (conversion.sequence != null) builder.setSequence(conversion.sequence)
     if (conversion.acknowledgedEpoch != null) builder.setAcknowledgedFilterEpoch(conversion.acknowledgedEpoch)
     if (conversion.claimedCapabilities.isNotEmpty()) builder.addAllClaimedCapabilities(conversion.claimedCapabilities)
@@ -134,7 +136,8 @@ public fun spanToEvent(conversion: SpanConversion): ProducerEvent {
 // for the beyond-int64 occurrence times the Go/TypeScript references test, which OTel Java's
 // long-valued clock cannot express.
 public fun buildOccurrenceTime(span: SpanData): OccurrenceTime =
-    OccurrenceTime.newBuilder()
+    OccurrenceTime
+        .newBuilder()
         .setClockDomainId("unix")
         .setNanoseconds(Int128Codec.fromInt64(span.startEpochNanos))
         .setUncertaintyNanoseconds(0)
@@ -146,7 +149,13 @@ private fun mapAttributes(attributes: Attributes): List<AttributeEntry> {
         val name = key.key
         if (name == ATTRIBUTE_EVENT_ID || name == ATTRIBUTE_PARENT_EVENT_ID) return@forEach // reserved
         val mapped = mapValue(key.type, value) ?: return@forEach // EMPTY / unmapped -> skip
-        entries.add(AttributeEntry.newBuilder().setKey(name).setValue(mapped).build())
+        entries.add(
+            AttributeEntry
+                .newBuilder()
+                .setKey(name)
+                .setValue(mapped)
+                .build(),
+        )
     }
     return entries
 }
@@ -154,24 +163,28 @@ private fun mapAttributes(attributes: Attributes): List<AttributeEntry> {
 // mapValue maps one attribute value onto the AttributeValue oneof, dispatching by the OTel
 // AttributeType. Returns null for unmapped values, mirroring the reference skipping null.
 @Suppress("UNCHECKED_CAST")
-private fun mapValue(type: AttributeType, value: Any?): AttributeValue? = when (type) {
-    AttributeType.STRING -> AttributeValue.newBuilder().setStringValue(value as String).build()
-    AttributeType.BOOLEAN -> AttributeValue.newBuilder().setBoolValue(value as Boolean).build()
-    AttributeType.LONG -> AttributeValue.newBuilder().setIntegerValue(value as Long).build()
-    AttributeType.DOUBLE -> AttributeValue.newBuilder().setDoubleValue(value as Double).build()
-    AttributeType.STRING_ARRAY -> arrayValue((value as List<String>).map { mapValue(AttributeType.STRING, it) })
-    AttributeType.BOOLEAN_ARRAY -> arrayValue((value as List<Boolean>).map { mapValue(AttributeType.BOOLEAN, it) })
-    AttributeType.LONG_ARRAY -> arrayValue((value as List<Long>).map { mapValue(AttributeType.LONG, it) })
-    AttributeType.DOUBLE_ARRAY -> arrayValue((value as List<Double>).map { mapValue(AttributeType.DOUBLE, it) })
-}
+private fun mapValue(
+    type: AttributeType,
+    value: Any?,
+): AttributeValue? =
+    when (type) {
+        AttributeType.STRING -> AttributeValue.newBuilder().setStringValue(value as String).build()
+        AttributeType.BOOLEAN -> AttributeValue.newBuilder().setBoolValue(value as Boolean).build()
+        AttributeType.LONG -> AttributeValue.newBuilder().setIntegerValue(value as Long).build()
+        AttributeType.DOUBLE -> AttributeValue.newBuilder().setDoubleValue(value as Double).build()
+        AttributeType.STRING_ARRAY -> arrayValue((value as List<String>).map { mapValue(AttributeType.STRING, it) })
+        AttributeType.BOOLEAN_ARRAY -> arrayValue((value as List<Boolean>).map { mapValue(AttributeType.BOOLEAN, it) })
+        AttributeType.LONG_ARRAY -> arrayValue((value as List<Long>).map { mapValue(AttributeType.LONG, it) })
+        AttributeType.DOUBLE_ARRAY -> arrayValue((value as List<Double>).map { mapValue(AttributeType.DOUBLE, it) })
+    }
 
 private fun arrayValue(values: List<AttributeValue?>): AttributeValue {
     val cleaned = values.filterNotNull()
-    return AttributeValue.newBuilder()
+    return AttributeValue
+        .newBuilder()
         .setArrayValue(
             AttributeArray.newBuilder().addAllValues(cleaned).build(),
-        )
-        .build()
+        ).build()
 }
 
 // collectCausalPredecessors reads the parent edge and every link edge, in that order.
@@ -212,7 +225,10 @@ private fun collectCausalPredecessors(
 // value under a reserved key is treated as absent, matching the reference's `typeof x ===
 // "string"` guard, so a mistyped attribute takes the malformed-link path rather than silently
 // producing a garbage event ID.
-private fun stringAttribute(attributes: Attributes, key: String): String? {
+private fun stringAttribute(
+    attributes: Attributes,
+    key: String,
+): String? {
     var found: String? = null
     attributes.forEach { k, v ->
         if (k.key == key && k.type == AttributeType.STRING) {

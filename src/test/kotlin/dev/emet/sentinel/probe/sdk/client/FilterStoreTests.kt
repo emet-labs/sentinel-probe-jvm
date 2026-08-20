@@ -119,23 +119,25 @@ class FilterStoreTests {
         // AtomicReference makes the swap atomic so no thread observes a torn pointer.
         val store = FilterStore.newFilterStore(makeFilter(u64(0L)))
         val latch = CountDownLatch(1)
-        val writers = (1..8).map {
-            Thread {
-                latch.await()
-                repeat(1000) { i -> store.set(makeFilter((i + 1L).toLong())) }
-            }
-        }
-        val readers = (1..8).map {
-            Thread {
-                latch.await()
-                repeat(2000) {
-                    val epoch = store.epoch()
-                    // epoch is either null or a non-negative value; never torn.
-                    if (epoch != null) assertTrue(epoch >= 0L)
-                    store.get()
+        val writers =
+            (1..8).map {
+                Thread {
+                    latch.await()
+                    repeat(1000) { i -> store.set(makeFilter((i + 1L).toLong())) }
                 }
             }
-        }
+        val readers =
+            (1..8).map {
+                Thread {
+                    latch.await()
+                    repeat(2000) {
+                        val epoch = store.epoch()
+                        // epoch is either null or a non-negative value; never torn.
+                        if (epoch != null) assertTrue(epoch >= 0L)
+                        store.get()
+                    }
+                }
+            }
         writers.forEach { it.start() }
         readers.forEach { it.start() }
         latch.countDown()

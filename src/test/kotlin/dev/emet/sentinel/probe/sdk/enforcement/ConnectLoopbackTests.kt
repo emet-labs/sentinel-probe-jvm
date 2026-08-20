@@ -8,12 +8,12 @@ import dev.emet.sentinel.model.v1.EventMatch
 import dev.emet.sentinel.model.v1.FailMode
 import dev.emet.sentinel.model.v1.ProducerEvent
 import dev.emet.sentinel.model.v1.SpecificationFilter
-import dev.emet.sentinel.probe.v1.DecideRequest
-import dev.emet.sentinel.probe.v1.DecideResponse
-import dev.emet.sentinel.probe.v1.DecisionAction
 import dev.emet.sentinel.probe.sdk.client.SentinelTransport
 import dev.emet.sentinel.probe.sdk.client.TransportOptions
 import dev.emet.sentinel.probe.sdk.client.decideFunc
+import dev.emet.sentinel.probe.v1.DecideRequest
+import dev.emet.sentinel.probe.v1.DecideResponse
+import dev.emet.sentinel.probe.v1.DecisionAction
 import org.junit.jupiter.api.Test
 import java.net.InetSocketAddress
 import kotlin.test.assertEquals
@@ -27,33 +27,46 @@ import kotlin.test.assertTrue
 // these tests are the wire-level proof.
 class ConnectLoopbackTests {
     private val testKind = "transfer.initiated"
-    private val testOptions = Options(
-        sourceHandle = "gateway.tool-calls",
-        requestID = "req-1",
-        idempotencyKey = "idem-1",
-    )
+    private val testOptions =
+        Options(
+            sourceHandle = "gateway.tool-calls",
+            requestID = "req-1",
+            idempotencyKey = "idem-1",
+        )
 
     private fun askAndBlockSpec(): SpecificationFilter =
-        SpecificationFilter.newBuilder()
+        SpecificationFilter
+            .newBuilder()
             .setSpecificationId("spec-1")
             .setSpecificationVersion("1.0.0")
             .setEventMatch(
-                EventMatch.newBuilder()
+                EventMatch
+                    .newBuilder()
                     .addEventKinds(testKind)
                     .setDeliveryMode(DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK)
                     .build(),
-            )
-            .setFailMode(FailMode.FAIL_MODE_OPEN)
+            ).setFailMode(FailMode.FAIL_MODE_OPEN)
             .build()
 
-    private fun closedAskAndBlockSpec(): SpecificationFilter =
-        askAndBlockSpec().toBuilder().setFailMode(FailMode.FAIL_MODE_CLOSED).build()
+    private fun closedAskAndBlockSpec(): SpecificationFilter = askAndBlockSpec().toBuilder().setFailMode(FailMode.FAIL_MODE_CLOSED).build()
 
-    private fun makeFilter(epoch: Long, spec: SpecificationFilter): EventFilter =
-        EventFilter.newBuilder().setEpoch(epoch).addSpecifications(spec).build()
+    private fun makeFilter(
+        epoch: Long,
+        spec: SpecificationFilter,
+    ): EventFilter =
+        EventFilter
+            .newBuilder()
+            .setEpoch(epoch)
+            .addSpecifications(spec)
+            .build()
 
     private fun makeEvent(): ProducerEvent =
-        ProducerEvent.newBuilder().setId("evt-1").setKind(testKind).setSchemaVersion("sentinel.model.v1").build()
+        ProducerEvent
+            .newBuilder()
+            .setId("evt-1")
+            .setKind(testKind)
+            .setSchemaVersion("sentinel.model.v1")
+            .build()
 
     private fun startLoopback(handler: (HttpExchange) -> Unit): HttpServer {
         val server = HttpServer.create(InetSocketAddress(0), 0)
@@ -62,7 +75,10 @@ class ConnectLoopbackTests {
         return server
     }
 
-    private fun sendProto(exchange: HttpExchange, response: DecideResponse) {
+    private fun sendProto(
+        exchange: HttpExchange,
+        response: DecideResponse,
+    ) {
         val bytes = response.toByteArray()
         exchange.responseHeaders.set("Content-Type", "application/proto")
         exchange.sendResponseHeaders(200, bytes.size.toLong())
@@ -70,7 +86,11 @@ class ConnectLoopbackTests {
         exchange.responseBody.close()
     }
 
-    private fun sendConnectError(exchange: HttpExchange, code: String, message: String) {
+    private fun sendConnectError(
+        exchange: HttpExchange,
+        code: String,
+        message: String,
+    ) {
         val body = """{"code":"$code","message":"$message"}""".toByteArray(Charsets.UTF_8)
         exchange.responseHeaders.set("Content-Type", "application/json")
         exchange.sendResponseHeaders(503, body.size.toLong())
@@ -78,25 +98,25 @@ class ConnectLoopbackTests {
         exchange.responseBody.close()
     }
 
-    private fun transportFor(server: HttpServer) = SentinelTransport(
-        TransportOptions(baseUrl = "http://127.0.0.1:${server.address.port}"),
-    )
+    private fun transportFor(server: HttpServer) =
+        SentinelTransport(
+            TransportOptions(baseUrl = "http://127.0.0.1:${server.address.port}"),
+        )
 
-    private fun permitResponse() =
-        DecideResponse.newBuilder().setAction(DecisionAction.DECISION_ACTION_PERMIT).build()
+    private fun permitResponse() = DecideResponse.newBuilder().setAction(DecisionAction.DECISION_ACTION_PERMIT).build()
 
-    private fun denyResponse() =
-        DecideResponse.newBuilder().setAction(DecisionAction.DECISION_ACTION_DENY).build()
+    private fun denyResponse() = DecideResponse.newBuilder().setAction(DecisionAction.DECISION_ACTION_DENY).build()
 
     @Test
     fun `deny over the real wire`() {
         val server = startLoopback { ex -> sendProto(ex, denyResponse()) }
         try {
-            val deps = Deps(
-                decide = decideFunc(transportFor(server)),
-                nowMonotonicNs = { 0L },
-                acceptedFailModeFor = { FailMode.FAIL_MODE_OPEN },
-            )
+            val deps =
+                Deps(
+                    decide = decideFunc(transportFor(server)),
+                    nowMonotonicNs = { 0L },
+                    acceptedFailModeFor = { FailMode.FAIL_MODE_OPEN },
+                )
             val outcome = gate(makeEvent(), makeFilter(5L, askAndBlockSpec()), 10000L, deps, testOptions)
             assertTrue(outcome is GateOutcome.Deny)
             assertEquals(5L, outcome.filterEpoch)
@@ -109,7 +129,8 @@ class ConnectLoopbackTests {
     fun `permit over the real wire`() {
         val server = startLoopback { ex -> sendProto(ex, permitResponse()) }
         try {
-            val deps = Deps(decide = decideFunc(transportFor(server)), nowMonotonicNs = { 0L }, acceptedFailModeFor = { FailMode.FAIL_MODE_OPEN })
+            val deps =
+                Deps(decide = decideFunc(transportFor(server)), nowMonotonicNs = { 0L }, acceptedFailModeFor = { FailMode.FAIL_MODE_OPEN })
             val outcome = gate(makeEvent(), makeFilter(5L, askAndBlockSpec()), 10000L, deps, testOptions)
             assertTrue(outcome is GateOutcome.Permit)
         } finally {
@@ -123,7 +144,12 @@ class ConnectLoopbackTests {
         // routes it into the contracted fail mode with the code recorded for audit.
         val server = startLoopback { ex -> sendConnectError(ex, "unavailable", "endpoint down") }
         try {
-            val deps = Deps(decide = decideFunc(transportFor(server)), nowMonotonicNs = { 0L }, acceptedFailModeFor = { FailMode.FAIL_MODE_CLOSED })
+            val deps =
+                Deps(
+                    decide = decideFunc(transportFor(server)),
+                    nowMonotonicNs = { 0L },
+                    acceptedFailModeFor = { FailMode.FAIL_MODE_CLOSED },
+                )
             val outcome = gate(makeEvent(), makeFilter(5L, closedAskAndBlockSpec()), 10000L, deps, testOptions)
             assertTrue(outcome is GateOutcome.FailClosedDeny)
             assertTrue(outcome.reason.startsWith("connect-unavailable"), "reason = ${outcome.reason}")

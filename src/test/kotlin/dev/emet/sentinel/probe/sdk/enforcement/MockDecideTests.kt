@@ -7,8 +7,8 @@ import org.junit.jupiter.api.Test
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 // MockDecider is the in-process Decide stub, mirroring tests/enforcement/mock-decide-server.ts
 // and Go's mockdecide_test.go: a canned response, a scripted sequence whose last element
@@ -26,7 +26,10 @@ class MockDecider(
     private val lastReq = AtomicReference<DecideRequest?>(null)
 
     fun decide(request: DecideRequest): DecideResult {
-        synchronized(this) { requests.add(request); lastReq.set(request) }
+        synchronized(this) {
+            requests.add(request)
+            lastReq.set(request)
+        }
         error?.let { return DecideResult.Err(it) }
         if (sequence.isNotEmpty()) {
             val idx = nextIndex.getAndIncrement().coerceAtMost(sequence.lastIndex)
@@ -34,7 +37,8 @@ class MockDecider(
         }
         if (response != null) return DecideResult.Ok(response)
         return DecideResult.Ok(
-            DecideResponse.newBuilder()
+            DecideResponse
+                .newBuilder()
                 .setRequestId(request.requestId)
                 .setAction(dev.emet.sentinel.probe.v1.DecisionAction.DECISION_ACTION_PERMIT)
                 .build(),
@@ -53,7 +57,8 @@ class MockDecideTests {
         action: dev.emet.sentinel.probe.v1.DecisionAction,
         vararg decisions: SpecificationDecision,
     ): DecideResponse =
-        DecideResponse.newBuilder()
+        DecideResponse
+            .newBuilder()
             .setRequestId("mock")
             .setAction(action)
             .addAllSpecifications(decisions.toList())
@@ -72,12 +77,14 @@ class MockDecideTests {
 
     @Test
     fun `scripted sequence repeats the last element`() {
-        val mock = MockDecider(
-            sequence = listOf(
-                makeResponse(dev.emet.sentinel.probe.v1.DecisionAction.DECISION_ACTION_PERMIT),
-                makeResponse(dev.emet.sentinel.probe.v1.DecisionAction.DECISION_ACTION_DENY),
-            ),
-        )
+        val mock =
+            MockDecider(
+                sequence =
+                    listOf(
+                        makeResponse(dev.emet.sentinel.probe.v1.DecisionAction.DECISION_ACTION_PERMIT),
+                        makeResponse(dev.emet.sentinel.probe.v1.DecisionAction.DECISION_ACTION_DENY),
+                    ),
+            )
         val req = DecideRequest.newBuilder().setRequestId("r").build()
         val a = (mock.decide(req) as DecideResult.Ok).response!!.action
         val b = (mock.decide(req) as DecideResult.Ok).response!!.action

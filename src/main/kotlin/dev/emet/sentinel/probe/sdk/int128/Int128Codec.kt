@@ -21,9 +21,9 @@
 // BigInteger.valueOf(long) would otherwise misread as negative.
 package dev.emet.sentinel.probe.sdk.int128
 
+import dev.emet.sentinel.model.v1.Int128
 import java.math.BigInteger
 import java.time.Instant
-import dev.emet.sentinel.model.v1.Int128
 
 public object Int128Codec {
     // twoPow64 is 2^64, the weight of the high word.
@@ -58,7 +58,8 @@ public object Int128Codec {
         // shiftRight is an arithmetic (floor) shift on negatives: sign-extends, matching Go's
         // big.Int.Rsh.
         val high = value.shiftRight(64)
-        return Int128.newBuilder()
+        return Int128
+            .newBuilder()
             .setHigh(high.toLong())
             .setLow(low.toLong())
             .build()
@@ -67,7 +68,8 @@ public object Int128Codec {
     // fromInt64 encodes an int64 without allocating a BigInteger. high is the sign extension
     // (0 or -1) and low is the two's-complement bit pattern. Kotlin `shr` is arithmetic.
     public fun fromInt64(value: Long): Int128 =
-        Int128.newBuilder()
+        Int128
+            .newBuilder()
             .setHigh(value shr 63)
             .setLow(value)
             .build()

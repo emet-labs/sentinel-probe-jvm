@@ -32,7 +32,9 @@ public class ProbeTracer(
     // before this call; the SDK never attaches processors itself.
     public companion object {
         @JvmStatic
-        public fun newProbeTracer(provider: SdkTracerProvider, tracerName: String): ProbeTracer =
-            ProbeTracer(provider, tracerName)
+        public fun newProbeTracer(
+            provider: SdkTracerProvider,
+            tracerName: String,
+        ): ProbeTracer = ProbeTracer(provider, tracerName)
     }
 }

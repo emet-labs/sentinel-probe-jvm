@@ -46,18 +46,22 @@ public object SourceTiers {
     public fun parse(raw: Map<String, Any?>): SourceTierMap {
         val config = LinkedHashMap<String, SourceEntry>(raw.size)
         for ((handle, value) in raw) {
-            val entry = value as? Map<*, *>
-                ?: throw IllegalArgumentException(
-                    "source-tier: entry for \"$handle\" must be an object, got ${value?.javaClass?.name ?: "null"}",
-                )
+            val entry =
+                value as? Map<*, *>
+                    ?: throw IllegalArgumentException(
+                        "source-tier: entry for \"$handle\" must be an object, got ${value?.javaClass?.name ?: "null"}",
+                    )
+
             @Suppress("UNCHECKED_CAST")
             val entryMap = entry as Map<String, Any?>
-            val tierValue = entryMap["tier"]
-                ?: throw IllegalArgumentException("source-tier: entry for \"$handle\" has no tier")
-            val tier = tierValue as? String
-                ?: throw IllegalArgumentException(
-                    "source-tier: tier for \"$handle\" must be a string, got ${tierValue?.javaClass?.name ?: "null"}",
-                )
+            val tierValue =
+                entryMap["tier"]
+                    ?: throw IllegalArgumentException("source-tier: entry for \"$handle\" has no tier")
+            val tier =
+                tierValue as? String
+                    ?: throw IllegalArgumentException(
+                        "source-tier: tier for \"$handle\" must be a string, got ${tierValue?.javaClass?.name ?: "null"}",
+                    )
             if (tier != SourceTierConfig.TIER_ANCHOR && tier != SourceTierConfig.TIER_CONTRIBUTING) {
                 throw IllegalArgumentException(
                     "source-tier: unknown tier \"$tier\" for \"$handle\", want " +
@@ -77,11 +81,15 @@ public object SourceTiers {
     //
     // An undeclared handle is an error. It is never SOURCE_TIER_UNSPECIFIED and never a default:
     // a source whose tier nobody declared has no business claiming one.
-    public fun tierForHandle(config: SourceTierMap, sourceHandle: String): SourceTier {
-        val entry = config[sourceHandle]
-            ?: throw IllegalArgumentException(
-                "source-tier: no entry for source_handle \"$sourceHandle\"",
-            )
+    public fun tierForHandle(
+        config: SourceTierMap,
+        sourceHandle: String,
+    ): SourceTier {
+        val entry =
+            config[sourceHandle]
+                ?: throw IllegalArgumentException(
+                    "source-tier: no entry for source_handle \"$sourceHandle\"",
+                )
         return when (entry.tier) {
             SourceTierConfig.TIER_ANCHOR -> SourceTier.SOURCE_TIER_ANCHOR
             SourceTierConfig.TIER_CONTRIBUTING -> SourceTier.SOURCE_TIER_CONTRIBUTING

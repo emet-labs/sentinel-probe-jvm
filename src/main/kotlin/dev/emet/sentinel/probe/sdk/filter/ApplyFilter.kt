@@ -10,11 +10,11 @@ package dev.emet.sentinel.probe.sdk.filter
 import dev.emet.sentinel.model.v1.AttributeEntry
 import dev.emet.sentinel.model.v1.AttributeValue
 import dev.emet.sentinel.model.v1.EventFilter
-import dev.emet.sentinel.model.v1.ProducerEvent
-import dev.emet.sentinel.model.v1.SequenceCoordinate
 import dev.emet.sentinel.model.v1.OccurrenceTime
-import dev.emet.sentinel.model.v1.SourceCapability
+import dev.emet.sentinel.model.v1.ProducerEvent
 import dev.emet.sentinel.model.v1.Sensitivity
+import dev.emet.sentinel.model.v1.SequenceCoordinate
+import dev.emet.sentinel.model.v1.SourceCapability
 import dev.emet.sentinel.probe.sdk.internal.specmatch.SpecMatch
 
 public object ApplyFilter {
@@ -33,7 +33,10 @@ public object ApplyFilter {
     //     trimmed — it is the causal skeleton, not an attribute.
     //
     // A null filter behaves as a filter with no specifications, i.e. drop.
-    public fun apply(event: ProducerEvent?, filter: EventFilter?): ProducerEvent? {
+    public fun apply(
+        event: ProducerEvent?,
+        filter: EventFilter?,
+    ): ProducerEvent? {
         if (event == null) return null
 
         // 1. Collect the SpecificationFilters whose EventMatch selects the event.
@@ -47,30 +50,33 @@ public object ApplyFilter {
 
         // 4. Otherwise keep the union of projected keys.
         val sourceAttrs = event.attributesList
-        val trimmed: List<AttributeEntry> = if (projectAll) {
-            // Fresh list: the returned event never aliases the input's attribute collection
-            // (the aliasing contract documented in the Go reference).
-            ArrayList(sourceAttrs)
-        } else {
-            val projected = HashSet<String>()
-            for (spec in selecting) {
-                projected.addAll(spec.eventMatch.projectedAttributeKeysList)
+        val trimmed: List<AttributeEntry> =
+            if (projectAll) {
+                // Fresh list: the returned event never aliases the input's attribute collection
+                // (the aliasing contract documented in the Go reference).
+                ArrayList(sourceAttrs)
+            } else {
+                val projected = HashSet<String>()
+                for (spec in selecting) {
+                    projected.addAll(spec.eventMatch.projectedAttributeKeysList)
+                }
+                val out = ArrayList<AttributeEntry>(sourceAttrs.size)
+                for (entry in sourceAttrs) {
+                    if (entry.key in projected) out.add(entry)
+                }
+                out
             }
-            val out = ArrayList<AttributeEntry>(sourceAttrs.size)
-            for (entry in sourceAttrs) {
-                if (entry.key in projected) out.add(entry)
-            }
-            out
-        }
 
         // 5. Rebuild with every other field unchanged.
-        val builder = ProducerEvent.newBuilder()
-            .setId(event.id)
-            .setSchemaVersion(event.schemaVersion)
-            .setKind(event.kind)
-            .addAllAttributes(trimmed)
-            .addAllCausalPredecessorIds(event.causalPredecessorIdsList)
-            .setClaimedSensitivity(event.claimedSensitivity)
+        val builder =
+            ProducerEvent
+                .newBuilder()
+                .setId(event.id)
+                .setSchemaVersion(event.schemaVersion)
+                .setKind(event.kind)
+                .addAllAttributes(trimmed)
+                .addAllCausalPredecessorIds(event.causalPredecessorIdsList)
+                .setClaimedSensitivity(event.claimedSensitivity)
         // Optional/sub-message fields are copied only when present, so a null sequence or
         // occurrence time is not replaced by a default instance (proto3 message presence).
         if (event.hasSequence()) builder.setSequence(event.sequence)

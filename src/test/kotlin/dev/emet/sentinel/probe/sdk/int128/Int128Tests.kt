@@ -17,24 +17,25 @@ class Int128Tests {
     @Test
     fun `round-trips through the signed 128-bit range`() {
         // Pinned seed keeps the property run hermetic (ADR-0019): no wall clock drives the RNG.
-        val cases = listOf(
-            "0",
-            "1",
-            "-1",
-            "127",
-            "-127",
-            "128",
-            "-128",
-            "9223372036854775807", // Long.MAX_VALUE
-            "-9223372036854775808", // Long.MIN_VALUE
-            "9223372036854775808", // 2^63, just beyond Long
-            "-9223372036854775809",
-            "18446744073709551615", // 2^64 - 1
-            "18446744073709551616", // 2^64
-            "-18446744073709551616", // -2^64
-            "170141183460469231731687303715884105727", // 2^127 - 1
-            "-170141183460469231731687303715884105728", // -2^127
-        )
+        val cases =
+            listOf(
+                "0",
+                "1",
+                "-1",
+                "127",
+                "-127",
+                "128",
+                "-128",
+                "9223372036854775807", // Long.MAX_VALUE
+                "-9223372036854775808", // Long.MIN_VALUE
+                "9223372036854775808", // 2^63, just beyond Long
+                "-9223372036854775809",
+                "18446744073709551615", // 2^64 - 1
+                "18446744073709551616", // 2^64
+                "-18446744073709551616", // -2^64
+                "170141183460469231731687303715884105727", // 2^127 - 1
+                "-170141183460469231731687303715884105728", // -2^127
+            )
         for (decimal in cases) {
             val value = bigInt(decimal)
             assertEquals(0, Int128Codec.toBigInt(Int128Codec.fromBigInt(value)).compareTo(value), "round-trip $decimal")

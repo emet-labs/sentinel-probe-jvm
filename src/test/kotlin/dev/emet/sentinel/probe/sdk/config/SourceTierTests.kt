@@ -11,28 +11,30 @@ class SourceTierTests {
 
     @Test
     fun `valid config parses`() {
-        val config = mustLoad(
-            """
+        val config =
+            mustLoad(
+                """
             {
               "gateway.tool-calls": { "tier": "ANCHOR" },
               "ledger.writer": { "tier": "CONTRIBUTING" }
             }
             """,
-        )
+            )
         assertEquals(SourceTierConfig.TIER_ANCHOR, config["gateway.tool-calls"]?.tier)
         assertEquals(SourceTierConfig.TIER_CONTRIBUTING, config["ledger.writer"]?.tier)
     }
 
     @Test
     fun `tierForHandle resolves both tiers`() {
-        val config = mustLoad(
-            """
+        val config =
+            mustLoad(
+                """
             {
               "anchor.src": { "tier": "ANCHOR" },
               "contrib.src": { "tier": "CONTRIBUTING" }
             }
             """,
-        )
+            )
         assertEquals(SourceTier.SOURCE_TIER_ANCHOR, SourceTiers.tierForHandle(config, "anchor.src"))
         assertEquals(SourceTier.SOURCE_TIER_CONTRIBUTING, SourceTiers.tierForHandle(config, "contrib.src"))
     }
@@ -40,9 +42,10 @@ class SourceTierTests {
     @Test
     fun `undeclared handle is an error, never a default`() {
         val config = mustLoad("""{ "anchor.src": { "tier": "ANCHOR" } }""")
-        val ex = assertThrows<IllegalArgumentException> {
-            SourceTiers.tierForHandle(config, "nobody.declared.me")
-        }
+        val ex =
+            assertThrows<IllegalArgumentException> {
+                SourceTiers.tierForHandle(config, "nobody.declared.me")
+            }
         assertTrue(ex.message!!.contains("no entry for source_handle"))
     }
 
@@ -54,49 +57,55 @@ class SourceTierTests {
 
     @Test
     fun `invalid tier value is rejected`() {
-        val ex = assertThrows<IllegalArgumentException> {
-            mustLoad("""{ "src": { "tier": "UNKNOWN" } }""")
-        }
+        val ex =
+            assertThrows<IllegalArgumentException> {
+                mustLoad("""{ "src": { "tier": "UNKNOWN" } }""")
+            }
         assertTrue(ex.message!!.contains("unknown tier \"UNKNOWN\""))
     }
 
     @Test
     fun `non-string tier is rejected`() {
-        val ex = assertThrows<IllegalArgumentException> {
-            mustLoad("""{ "src": { "tier": 7 } }""")
-        }
+        val ex =
+            assertThrows<IllegalArgumentException> {
+                mustLoad("""{ "src": { "tier": 7 } }""")
+            }
         assertTrue(ex.message!!.contains("must be a string"))
     }
 
     @Test
     fun `missing tier is rejected`() {
-        val ex = assertThrows<IllegalArgumentException> {
-            mustLoad("""{ "src": { "note": "no tier here" } }""")
-        }
+        val ex =
+            assertThrows<IllegalArgumentException> {
+                mustLoad("""{ "src": { "note": "no tier here" } }""")
+            }
         assertTrue(ex.message!!.contains("has no tier"))
     }
 
     @Test
     fun `non-object config is rejected`() {
-        val ex = assertThrows<IllegalArgumentException> {
-            SourceTiers.load("""[1, 2, 3]""")
-        }
+        val ex =
+            assertThrows<IllegalArgumentException> {
+                SourceTiers.load("""[1, 2, 3]""")
+            }
         assertTrue(ex.message!!.contains("must be an object"))
     }
 
     @Test
     fun `non-object entry is rejected`() {
-        val ex = assertThrows<IllegalArgumentException> {
-            mustLoad("""{ "src": "not an object" }""")
-        }
+        val ex =
+            assertThrows<IllegalArgumentException> {
+                mustLoad("""{ "src": "not an object" }""")
+            }
         assertTrue(ex.message!!.contains("must be an object"))
     }
 
     @Test
     fun `extra keys are preserved (passthrough)`() {
-        val config = mustLoad(
-            """{ "src": { "tier": "ANCHOR", "owner": "team-a", "deployed_at": "2024-01" } }""",
-        )
+        val config =
+            mustLoad(
+                """{ "src": { "tier": "ANCHOR", "owner": "team-a", "deployed_at": "2024-01" } }""",
+            )
         val entry = config["src"]!!
         assertEquals("ANCHOR", entry.tier)
         assertEquals("team-a", entry.extra["owner"])
@@ -121,9 +130,10 @@ class SourceTierTests {
         // A caller can build a SourceTierMap literal with an unknown tier; the lookup must still
         // throw rather than silently map to UNSPECIFIED.
         val config: SourceTierMap = mapOf("src" to SourceEntry(tier = "BOGUS", extra = emptyMap()))
-        val ex = assertThrows<IllegalArgumentException> {
-            SourceTiers.tierForHandle(config, "src")
-        }
+        val ex =
+            assertThrows<IllegalArgumentException> {
+                SourceTiers.tierForHandle(config, "src")
+            }
         assertTrue(ex.message!!.contains("unknown tier \"BOGUS\""))
     }
 
