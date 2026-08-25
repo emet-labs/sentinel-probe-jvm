@@ -5,8 +5,10 @@ import com.sun.net.httpserver.HttpServer
 import dev.emet.sentinel.model.v1.DeliveryMode
 import dev.emet.sentinel.model.v1.EventFilter
 import dev.emet.sentinel.model.v1.EventMatch
+import dev.emet.sentinel.model.v1.EvaluationMode
 import dev.emet.sentinel.model.v1.FailMode
 import dev.emet.sentinel.model.v1.ProducerEvent
+import dev.emet.sentinel.model.v1.Readiness
 import dev.emet.sentinel.model.v1.SpecificationFilter
 import dev.emet.sentinel.probe.sdk.client.SentinelTransport
 import dev.emet.sentinel.probe.sdk.client.TransportOptions
@@ -46,6 +48,9 @@ class ConnectLoopbackTests {
                     .setDeliveryMode(DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK)
                     .build(),
             ).setFailMode(FailMode.FAIL_MODE_OPEN)
+            .setEvaluationMode(EvaluationMode.EVALUATION_MODE_ENFORCE)
+            .setReadiness(Readiness.READINESS_ACTIVE)
+            .setLatencyBudgetNanoseconds(10_000L)
             .build()
 
     private fun closedAskAndBlockSpec(): SpecificationFilter = askAndBlockSpec().toBuilder().setFailMode(FailMode.FAIL_MODE_CLOSED).build()

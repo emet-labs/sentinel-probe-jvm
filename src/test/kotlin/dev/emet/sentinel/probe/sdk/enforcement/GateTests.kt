@@ -151,7 +151,7 @@ class GateTests {
         val deps =
             makeDeps(mock, 0).copy(nowMonotonicNs = {
                 calls++
-                if (calls == 1) 0L else 10000L // entry: budget remains; after response: budget gone
+                if (calls <= 2) 0L else 10000L // anchor + request remain; response exhausts
             })
         val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), deps, testOptions)
         assertTrue(outcome is GateOutcome.FailOpenPermit)
