@@ -10,9 +10,21 @@ import dev.emet.sentinel.probe.v1.DecideRequest
 import dev.emet.sentinel.probe.v1.DecideResponse
 import dev.emet.sentinel.probe.v1.DecisionAction
 import org.junit.jupiter.api.Test
-import java.io.OutputStream
+import java.net.Authenticator
+import java.net.CookieHandler
 import java.net.InetSocketAddress
+import java.net.ProxySelector
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
+import java.util.Optional
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executor
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLParameters
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -23,6 +35,44 @@ import kotlin.test.fail
 // protobuf, decodes a binary protobuf response, and parses Connect error envelopes (always
 // JSON). This is the JVM analog of sdk/python/tests/test_transport.py.
 class TransportTests {
+    private class ThrowingHttpClient(
+        private val throwable: Throwable,
+    ) : HttpClient() {
+        override fun cookieHandler(): Optional<CookieHandler> = Optional.empty()
+
+        override fun connectTimeout(): Optional<Duration> = Optional.empty()
+
+        override fun followRedirects(): Redirect = Redirect.NEVER
+
+        override fun proxy(): Optional<ProxySelector> = Optional.empty()
+
+        override fun sslContext(): SSLContext = SSLContext.getDefault()
+
+        override fun sslParameters(): SSLParameters = SSLParameters()
+
+        override fun authenticator(): Optional<Authenticator> = Optional.empty()
+
+        override fun version(): Version = Version.HTTP_1_1
+
+        override fun executor(): Optional<Executor> = Optional.empty()
+
+        override fun <T> send(
+            request: HttpRequest,
+            responseBodyHandler: HttpResponse.BodyHandler<T>,
+        ): HttpResponse<T> = throw throwable
+
+        override fun <T> sendAsync(
+            request: HttpRequest,
+            responseBodyHandler: HttpResponse.BodyHandler<T>,
+        ): CompletableFuture<HttpResponse<T>> = error("not used")
+
+        override fun <T> sendAsync(
+            request: HttpRequest,
+            responseBodyHandler: HttpResponse.BodyHandler<T>,
+            pushPromiseHandler: HttpResponse.PushPromiseHandler<T>,
+        ): CompletableFuture<HttpResponse<T>> = error("not used")
+    }
+
     private fun makeRequest(): DecideRequest =
         DecideRequest
             .newBuilder()
@@ -205,5 +255,22 @@ class TransportTests {
         val transport = SentinelTransport(TransportOptions(baseUrl = "http://127.0.0.1:1"))
         val err = decideFunc(transport)(makeRequest())
         assertTrue(err is dev.emet.sentinel.probe.sdk.enforcement.DecideResult.Err)
+    }
+
+    @Test
+    fun `decideFunc preserves every transport throwable by identity`() {
+        val sentinel = AssertionError("sentinel transport failure")
+        val transport =
+            SentinelTransport(
+                TransportOptions(
+                    baseUrl = "http://sentinel.invalid",
+                    httpClient = ThrowingHttpClient(sentinel),
+                ),
+            )
+
+        val result = decideFunc(transport)(makeRequest())
+
+        assertTrue(result is dev.emet.sentinel.probe.sdk.enforcement.DecideResult.Err)
+        assertSame(sentinel, result.error)
     }
 }
