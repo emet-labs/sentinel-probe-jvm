@@ -28,6 +28,16 @@ class ConformanceVectorsTests {
     }
 
     @Test
+    fun `manifest suite registry fails closed`() {
+        val manifest = load("manifest-v1.json")
+        val suites = manifest["suites"] as List<Map<String, String>>
+        assertEquals(
+            listOf("spec_match", "int128", "enforcement_gate"),
+            suites.map { it.getValue("kind") },
+        )
+    }
+
+    @Test
     fun `exact Int128 words and independent decoding follow shared vectors`() {
         val suite = load("int128-v1.json")
         assertEquals("int128", suite["kind"])
