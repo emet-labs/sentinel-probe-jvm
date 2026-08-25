@@ -25,4 +25,10 @@ class BudgetTests {
     fun `positive budget for now before deadline`() {
         assertEquals(1L, remainingTransportBudgetNs(1, 0))
     }
+
+    @Test
+    fun `signed boundary wrap preserves forward elapsed`() {
+        assertEquals(10L, remainingTransportBudgetNs(Long.MIN_VALUE + 4, Long.MAX_VALUE - 5))
+        assertEquals(0L, remainingTransportBudgetNs(Long.MIN_VALUE, 0))
+    }
 }
