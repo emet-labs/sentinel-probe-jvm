@@ -59,6 +59,9 @@ class GateTests {
                     .setDeliveryMode(deliveryMode)
                     .build(),
             ).setFailMode(failMode)
+            .setEvaluationMode(dev.emet.sentinel.model.v1.EvaluationMode.EVALUATION_MODE_ENFORCE)
+            .setReadiness(dev.emet.sentinel.model.v1.Readiness.READINESS_ACTIVE)
+            .setLatencyBudgetNanoseconds(10_000L)
             .build()
 
     private fun askAndBlockSpec(): SpecificationFilter =

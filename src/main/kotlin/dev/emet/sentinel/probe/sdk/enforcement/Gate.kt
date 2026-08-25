@@ -22,8 +22,15 @@ public fun remainingTransportBudgetNs(
     deadlineNs: Long,
     nowNs: Long,
 ): Long {
-    val remaining = deadlineNs - nowNs
-    return if (remaining <= 0) 0L else remaining
+    val delta = deadlineNs.toULong() - nowNs.toULong()
+    return if (delta < (1uL shl 63)) delta.toLong() else 0L
+}
+
+private data class BudgetState(val anchor: Long, val budget: ULong) {
+    fun remaining(now: Long): ULong {
+        val elapsed = now.toULong() - anchor.toULong()
+        return if (elapsed >= (1uL shl 63) || elapsed >= budget) 0uL else budget - elapsed
+    }
 }
 
 // GateOutcome is what the Probe must do, plus the evidence for why. A sealed class is the
@@ -156,7 +163,7 @@ public fun gate(
         filter.specificationsList.filter { spec ->
             dev.emet.sentinel.probe.sdk.internal.specmatch.SpecMatch
                 .selects(spec, event) &&
-                isAskAndBlock(spec)
+                isEnforceable(spec)
         }
     if (enforcing.isEmpty()) {
         return GateOutcome.Permit(
@@ -168,16 +175,20 @@ public fun gate(
     // 3. Aggregate fail mode: fail-closed wins.
     val aggregateFailMode = computeAggregateFailMode(enforcing, deps)
 
+    val budgets = enforcing.map { if (it.hasLatencyBudgetNanoseconds()) it.latencyBudgetNanoseconds.toULong() else 0uL }
+    if (budgets.any { it == 0uL }) return applyFailMode(aggregateFailMode, "budget-exhausted", filterEpoch, null)
+    val anchor = deps.nowMonotonicNs()
+    var effective = budgets.min()
+    if (deadlineNs != null) {
+        val caller = deadlineNs.toULong() - anchor.toULong()
+        if (caller >= (1uL shl 63)) effective = 0uL else if (caller < effective) effective = caller
+    }
+    val budgetState = BudgetState(anchor, effective)
+
     // 4. Budget. Exhausted before the call means apply the fail mode without asking, so a
     //    Probe that is already out of time does not spend more of it.
-    var remainingBudget: Long? = null
-    if (deadlineNs != null) {
-        val remaining = remainingTransportBudgetNs(deadlineNs, deps.nowMonotonicNs())
-        if (remaining == 0L) {
-            return applyFailMode(aggregateFailMode, "budget-exhausted", filterEpoch, null)
-        }
-        remainingBudget = remaining
-    }
+    val remainingBudget = budgetState.remaining(deps.nowMonotonicNs())
+    if (remainingBudget == 0uL) return applyFailMode(aggregateFailMode, "budget-exhausted", filterEpoch, null)
 
     // 5. Build the request from the already-projected event.
     val requestBuilder =
@@ -188,14 +199,14 @@ public fun gate(
             .setSourceHandle(options.sourceHandle)
             .setFilterEpoch(filterEpoch)
             .setProducerEvent(event)
-    if (remainingBudget != null) requestBuilder.setRemainingTransportBudgetNanoseconds(remainingBudget)
+    requestBuilder.setRemainingTransportBudgetNanoseconds(remainingBudget.toLong())
     val request = requestBuilder.build()
 
     // 6. Ask. Never a permit, never a blind pass-through.
     val result = deps.decide(request)
     return when (result) {
         is DecideResult.Err -> applyFailMode(aggregateFailMode, describeError(result.error), filterEpoch, null)
-        is DecideResult.Ok -> handleResponse(result.response, aggregateFailMode, filterEpoch, deadlineNs, deps)
+        is DecideResult.Ok -> handleResponse(result.response, aggregateFailMode, filterEpoch, budgetState, deps)
     }
 }
 
@@ -203,7 +214,7 @@ private fun handleResponse(
     response: DecideResponse?,
     aggregateFailMode: FailMode,
     filterEpoch: Long,
-    deadlineNs: Long?,
+    budgetState: BudgetState,
     deps: Deps,
 ): GateOutcome {
     val decisions = response?.specificationsList ?: emptyList()
@@ -218,10 +229,7 @@ private fun handleResponse(
         dev.emet.sentinel.probe.v1.DecisionAction.DECISION_ACTION_DENY ->
             GateOutcome.Deny(reason = "deny", filterEpoch = filterEpoch, specifications = decisions)
         dev.emet.sentinel.probe.v1.DecisionAction.DECISION_ACTION_DEFER -> {
-            if (deadlineNs == null) {
-                // No latency budget was declared, so there is no timeout path: defer indefinitely.
-                GateOutcome.Defer(reason = "defer", filterEpoch = filterEpoch, specifications = decisions)
-            } else if (remainingTransportBudgetNs(deadlineNs, deps.nowMonotonicNs()) > 0L) {
+            if (budgetState.remaining(deps.nowMonotonicNs()) > 0uL) {
                 GateOutcome.Defer(reason = "defer", filterEpoch = filterEpoch, specifications = decisions)
             } else {
                 applyFailMode(aggregateFailMode, "defer-budget-exhausted", filterEpoch, decisions)
@@ -272,8 +280,10 @@ private fun computeAggregateFailMode(
     return FailMode.FAIL_MODE_OPEN
 }
 
-private fun isAskAndBlock(spec: SpecificationFilter): Boolean =
-    spec.eventMatch.deliveryMode == dev.emet.sentinel.model.v1.DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK
+private fun isEnforceable(spec: SpecificationFilter): Boolean =
+    spec.eventMatch.deliveryMode == dev.emet.sentinel.model.v1.DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK &&
+        spec.evaluationMode == dev.emet.sentinel.model.v1.EvaluationMode.EVALUATION_MODE_ENFORCE &&
+        spec.readiness == dev.emet.sentinel.model.v1.Readiness.READINESS_ACTIVE
 
 // CodedError marks a transport error that carries a Connect code (e.g. "unavailable"). The
 // transport's ConnectError implements it; enforcement depends on the interface, not the
