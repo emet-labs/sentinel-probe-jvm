@@ -16,13 +16,6 @@ complexity:
     active: false
   LargeClass:
     active: false
-  TooManyFunctions:
-    active: false
-exceptions:
-  # decideFunc is the error-normalizing boundary: it must convert every
-  # transport Throwable into the gate's explicit error variant.
-  TooGenericExceptionCaught:
-    active: false
 naming:
   FunctionParameterNaming:
     active: false
@@ -44,8 +37,4 @@ style:
   UseDataClass:
     active: false
   NestedClassesVisibility:
-    active: false
-  # The parser deliberately owns precise configuration-error messages rather
-  # than exposing require()'s assertion-style wording.
-  UseRequire:
     active: false

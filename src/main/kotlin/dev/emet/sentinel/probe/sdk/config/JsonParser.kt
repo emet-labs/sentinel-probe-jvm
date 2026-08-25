@@ -8,6 +8,9 @@
 // encoding/json does.
 package dev.emet.sentinel.probe.sdk.config
 
+// The dependency-free recursive-descent parser is intentionally decomposed into small grammar
+// helpers so its state transitions remain easy to audit.
+@Suppress("TooManyFunctions")
 internal class JsonParser(
     private val source: String,
 ) {

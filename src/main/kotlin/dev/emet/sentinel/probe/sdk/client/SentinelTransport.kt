@@ -156,6 +156,9 @@ private fun readJsonString(
 // (DecideResult). Driving the shipped adapter here rather than a local copy is the point: this
 // exercises the production path end to end. Errors are returned unwrapped so the gate can
 // classify ConnectError distinctly from a raw transport error.
+// This boundary intentionally converts every transport Throwable into Err; the gate then applies
+// the Specification's declared fail mode as required by ADR-0023.
+@Suppress("TooGenericExceptionCaught")
 public fun decideFunc(transport: SentinelTransport): (DecideRequest) -> dev.emet.sentinel.probe.sdk.enforcement.DecideResult =
     { request ->
         try {

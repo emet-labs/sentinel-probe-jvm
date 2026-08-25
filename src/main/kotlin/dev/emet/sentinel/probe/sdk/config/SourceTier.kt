@@ -60,7 +60,7 @@ public object SourceTiers {
             val tier =
                 tierValue as? String
                     ?: throw IllegalArgumentException(
-                        "source-tier: tier for \"$handle\" must be a string, got ${tierValue?.javaClass?.name ?: "null"}",
+                        "source-tier: tier for \"$handle\" must be a string, got ${tierValue.javaClass.name}",
                     )
             if (tier != SourceTierConfig.TIER_ANCHOR && tier != SourceTierConfig.TIER_CONTRIBUTING) {
                 throw IllegalArgumentException(
