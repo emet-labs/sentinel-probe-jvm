@@ -3,9 +3,9 @@ package dev.emet.sentinel.probe.sdk.enforcement
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import dev.emet.sentinel.model.v1.DeliveryMode
+import dev.emet.sentinel.model.v1.EvaluationMode
 import dev.emet.sentinel.model.v1.EventFilter
 import dev.emet.sentinel.model.v1.EventMatch
-import dev.emet.sentinel.model.v1.EvaluationMode
 import dev.emet.sentinel.model.v1.FailMode
 import dev.emet.sentinel.model.v1.ProducerEvent
 import dev.emet.sentinel.model.v1.Readiness
