@@ -504,4 +504,24 @@ class GateTests {
         assertTrue(outcome is GateOutcome.NoFilter)
         assertEquals(0, mock.callCount())
     }
+
+    @Test
+    fun `missing eligible budget exhausts without clock or Decide`() {
+        val spec = askAndBlockSpec().toBuilder().clearLatencyBudgetNanoseconds().build()
+        val mock = MockDecider()
+        var clockCalls = 0
+        val deps =
+            Deps(
+                decide = mock::decide,
+                nowMonotonicNs = {
+                    clockCalls++
+                    0L
+                },
+                acceptedFailModeFor = { FailMode.FAIL_MODE_OPEN },
+            )
+        val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), spec), null, deps, testOptions)
+        assertTrue(outcome is GateOutcome.FailOpenPermit)
+        assertEquals(0, clockCalls)
+        assertEquals(0, mock.callCount())
+    }
 }
