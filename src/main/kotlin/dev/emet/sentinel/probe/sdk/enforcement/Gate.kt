@@ -26,7 +26,10 @@ public fun remainingTransportBudgetNs(
     return if (delta < (1uL shl 63)) delta.toLong() else 0L
 }
 
-private data class BudgetState(val anchor: Long, val budget: ULong) {
+private data class BudgetState(
+    val anchor: Long,
+    val budget: ULong,
+) {
     fun remaining(now: Long): ULong {
         val elapsed = now.toULong() - anchor.toULong()
         return if (elapsed >= (1uL shl 63) || elapsed >= budget) 0uL else budget - elapsed
@@ -181,7 +184,11 @@ public fun gate(
     var effective = budgets.min()
     if (deadlineNs != null) {
         val caller = deadlineNs.toULong() - anchor.toULong()
-        if (caller >= (1uL shl 63)) effective = 0uL else if (caller < effective) effective = caller
+        if (caller >= (1uL shl 63)) {
+            effective = 0uL
+        } else if (caller < effective) {
+            effective = caller
+        }
     }
     val budgetState = BudgetState(anchor, effective)
 
