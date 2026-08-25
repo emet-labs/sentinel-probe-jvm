@@ -51,6 +51,55 @@ class ConformanceVectorsTests {
     }
 
     @Test
+    fun `shared malformed corpus is rejected by category`() {
+        val manifest = load("manifest-v1.json")
+        val fixtures = manifest["malformed"] as List<Map<String, String>>
+        for (fixture in fixtures) {
+            assertEquals(
+                fixture.getValue("rejection_category"),
+                malformedCategory(fixture.getValue("path")),
+                fixture.getValue("path"),
+            )
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun malformedCategory(name: String): String {
+        val parser = JsonParser(root.resolve(name).toFile().readText())
+        val value = try {
+            (parser.parseValue() as Map<String, Any?>).also {
+                parser.skipWhitespace()
+                parser.expectEof()
+            }
+        } catch (error: IllegalArgumentException) {
+            return if (error.message?.contains("duplicate JSON key") == true) "duplicate-key" else "syntax"
+        }
+        if (value["format_version"] != "1.0.0") return "version"
+        if (!value.containsKey("cases")) return "missing-field"
+        if (value.keys.any { it !in setOf("format_version", "kind", "cases") }) return "unknown-field"
+        val kind = value["kind"] as? String
+        if (kind !in setOf("spec_match", "int128", "enforcement_gate")) return "unknown-token"
+        if (kind == "int128") {
+            val cases = value["cases"] as List<Map<String, String>>
+            if (cases.map { it["id"] }.toSet().size != cases.size) return "duplicate-id"
+            val decimal = Regex("^(0|-?[1-9][0-9]*)$")
+            if (
+                cases.any { case ->
+                    listOf("value", "high", "low").any {
+                        decimal.matchEntire(case[it].orEmpty()) == null
+                    }
+                }
+            ) {
+                return "integer-lexeme"
+            }
+            val minimum = BigInteger.ONE.shiftLeft(127).negate()
+            val maximum = BigInteger.ONE.shiftLeft(127).subtract(BigInteger.ONE)
+            if (cases.any { BigInteger(it.getValue("value")) !in minimum..maximum }) return "integer-range"
+        }
+        return "accepted"
+    }
+
+    @Test
     fun `exact Int128 words and independent decoding follow shared vectors`() {
         val suite = load("int128-v1.json")
         assertEquals("int128", suite["kind"])
