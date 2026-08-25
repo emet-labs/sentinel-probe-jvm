@@ -53,6 +53,9 @@ internal class JsonParser(
             skipWhitespace()
             expect(':')
             val value = parseValue()
+            if (map.containsKey(key)) {
+                throw IllegalArgumentException("source-tier: duplicate JSON key '$key'")
+            }
             map[key] = value
             skipWhitespace()
             when (peek()) {
