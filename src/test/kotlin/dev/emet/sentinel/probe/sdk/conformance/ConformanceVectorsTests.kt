@@ -141,6 +141,7 @@ class ConformanceVectorsTests {
     }
 
     @Test
+    @Suppress("NestedBlockDepth")
     fun `enforcement scenarios execute the production gate`() {
         val suite = load("enforcement-gate-v1.json")
         val cases = suite["cases"] as List<Map<String, Any?>>
