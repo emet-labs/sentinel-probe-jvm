@@ -336,18 +336,18 @@ class GateTests {
     }
 
     @Test
-    fun `without budget permits`() {
+    fun `without caller budget uses Specification budget`() {
         val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_PERMIT))
         val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), null, makeDeps(mock, 0), testOptions)
         assertTrue(outcome is GateOutcome.Permit)
-        assertFalse(mock.lastRequest()!!.hasRemainingTransportBudgetNanoseconds(), "an absent latency budget must leave the field absent")
+        assertEquals(10_000L, mock.lastRequest()!!.remainingTransportBudgetNanoseconds)
     }
 
     @Test
-    fun `without budget defers indefinitely`() {
+    fun `without caller budget defers while Specification budget remains`() {
         val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_DEFER))
         val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), null, makeDeps(mock, 0), testOptions)
-        assertTrue(outcome is GateOutcome.Defer, "no declared latency budget means no timeout path")
+        assertTrue(outcome is GateOutcome.Defer)
     }
 
     @Test
