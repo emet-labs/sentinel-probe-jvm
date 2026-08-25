@@ -25,6 +25,15 @@ class SourceTierTests {
     }
 
     @Test
+    fun `valid passthrough JSON values parse`() {
+        val config =
+            mustLoad(
+                """{ "src": { "tier": "ANCHOR", "values": ["text", 7, 1.5, true, null] } }""",
+            )
+        assertEquals(listOf("text", 7L, 1.5, true, null), config["src"]?.extra?.get("values"))
+    }
+
+    @Test
     fun `tierForHandle resolves both tiers`() {
         val config =
             mustLoad(
@@ -141,5 +150,43 @@ class SourceTierTests {
     fun `invalid JSON is rejected`() {
         val ex = assertThrows<IllegalArgumentException> { SourceTiers.load("{ not json") }
         assertTrue(ex.message!!.startsWith("source-tier:"))
+    }
+
+    @Test
+    fun `empty JSON preserves the initial end-of-input error`() {
+        assertLoadError("", "source-tier: unexpected end of JSON")
+    }
+
+    @Test
+    fun `trailing JSON preserves the parser position`() {
+        assertLoadError("{}x", "source-tier: trailing characters in JSON at index 2")
+    }
+
+    @Test
+    fun `unterminated string escape preserves its error`() {
+        assertLoadError("{\"src\":\"\\", "source-tier: unterminated escape in string")
+    }
+
+    @Test
+    fun `invalid number start preserves its character and position`() {
+        assertLoadError("?", "source-tier: unexpected character '?' at index 0")
+    }
+
+    @Test
+    fun `unexpected end while peeking preserves its error`() {
+        assertLoadError("{", "source-tier: unexpected end of JSON")
+    }
+
+    @Test
+    fun `expected character mismatch preserves its character and position`() {
+        assertLoadError("{\"src\"}", "source-tier: expected ':' at index 6")
+    }
+
+    private fun assertLoadError(
+        document: String,
+        expectedMessage: String,
+    ) {
+        val exception = assertThrows<IllegalArgumentException> { SourceTiers.load(document) }
+        assertEquals(expectedMessage, exception.message)
     }
 }

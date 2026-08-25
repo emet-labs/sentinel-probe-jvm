@@ -15,7 +15,7 @@ internal class JsonParser(
 
     fun parseValue(): Any? {
         skipWhitespace()
-        if (index >= source.length) throw IllegalArgumentException("source-tier: unexpected end of JSON")
+        require(index < source.length) { "source-tier: unexpected end of JSON" }
         return when (val c = source[index]) {
             '{' -> parseObject()
             '[' -> parseArray()
@@ -27,8 +27,8 @@ internal class JsonParser(
     }
 
     fun expectEof() {
-        if (index < source.length && !source[index].isWhitespace()) {
-            throw IllegalArgumentException("source-tier: trailing characters in JSON at index $index")
+        require(index >= source.length || source[index].isWhitespace()) {
+            "source-tier: trailing characters in JSON at index $index"
         }
     }
 
@@ -97,7 +97,7 @@ internal class JsonParser(
             when {
                 c == '"' -> return sb.toString()
                 c == '\\' -> {
-                    if (index >= source.length) throw IllegalArgumentException("source-tier: unterminated escape in string")
+                    require(index < source.length) { "source-tier: unterminated escape in string" }
                     val esc = source[index++]
                     sb.append(
                         when (esc) {
@@ -147,8 +147,8 @@ internal class JsonParser(
     private fun parseNumberOrFail(first: Char): Any {
         // A number is anything matching -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?. Keep it as a
         // Double for uniformity; SourceTiers only inspects string tiers and opaque extra values.
-        if (first != '-' && first !in '0'..'9') {
-            throw IllegalArgumentException("source-tier: unexpected character '$first' at index $index")
+        require(first == '-' || first in '0'..'9') {
+            "source-tier: unexpected character '$first' at index $index"
         }
         val start = index
         if (peek() == '-') index++
@@ -169,18 +169,14 @@ internal class JsonParser(
         return if (isDouble) token.toDouble() else token.toLong()
     }
 
-    private fun peek(): Char =
-        if (index <
-            source.length
-        ) {
-            source[index]
-        } else {
-            throw IllegalArgumentException("source-tier: unexpected end of JSON")
-        }
+    private fun peek(): Char {
+        require(index < source.length) { "source-tier: unexpected end of JSON" }
+        return source[index]
+    }
 
     private fun expect(c: Char) {
-        if (index >= source.length || source[index] != c) {
-            throw IllegalArgumentException("source-tier: expected '$c' at index $index")
+        require(index < source.length && source[index] == c) {
+            "source-tier: expected '$c' at index $index"
         }
         index++
     }
