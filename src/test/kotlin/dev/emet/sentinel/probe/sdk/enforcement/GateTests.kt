@@ -506,6 +506,77 @@ class GateTests {
     }
 
     @Test
+    fun `effective budget is the minimum across eligible Specifications`() {
+        // The behavior issue #113 is named for: with two-or-more eligible Specifications
+        // carrying different positive budgets, the effective (wire) budget must be the
+        // smallest one, not the largest and not merely "a" budget.
+        val specA =
+            makeSpec("spec-a", listOf(testKind), FailMode.FAIL_MODE_OPEN, DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK)
+                .toBuilder()
+                .setLatencyBudgetNanoseconds(50_000L)
+                .build()
+        val specB =
+            makeSpec("spec-b", listOf(testKind), FailMode.FAIL_MODE_OPEN, DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK)
+                .toBuilder()
+                .setLatencyBudgetNanoseconds(8_000L)
+                .build()
+        val specC =
+            makeSpec("spec-c", listOf(testKind), FailMode.FAIL_MODE_OPEN, DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK)
+                .toBuilder()
+                .setLatencyBudgetNanoseconds(20_000L)
+                .build()
+        val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_PERMIT))
+        val outcome =
+            gate(makeEvent(testKind), makeFilter(u64(testEpoch), specA, specB, specC), null, makeDeps(mock, 0), testOptions)
+        assertTrue(outcome is GateOutcome.Permit)
+        assertEquals(8_000L, mock.lastRequest()!!.remainingTransportBudgetNanoseconds, "wire budget must be the minimum eligible budget")
+    }
+
+    @Test
+    fun `defer is gated by the minimum Specification budget, not the largest`() {
+        val specA =
+            makeSpec("spec-a", listOf(testKind), FailMode.FAIL_MODE_OPEN, DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK)
+                .toBuilder()
+                .setLatencyBudgetNanoseconds(20_000L)
+                .build()
+        val specB =
+            makeSpec("spec-b", listOf(testKind), FailMode.FAIL_MODE_OPEN, DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK)
+                .toBuilder()
+                .setLatencyBudgetNanoseconds(5_000L)
+                .build()
+        val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_DEFER))
+        var calls = 0
+        val deps =
+            makeDeps(mock, 0).copy(nowMonotonicNs = {
+                calls++
+                if (calls <= 2) 0L else 5_000L // past the smaller budget, not the larger one
+            })
+        val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), specA, specB), null, deps, testOptions)
+        assertTrue(
+            outcome is GateOutcome.FailOpenPermit,
+            "the minimum eligible budget must gate the timeout, not the largest: got $outcome",
+        )
+        assertEquals("defer-budget-exhausted", outcome.reason)
+    }
+
+    @Test
+    fun `without a caller deadline, defer times out once the Specification budget is exhausted`() {
+        // No caller deadline is required for a Specification's own latency budget to
+        // eventually time out a DEFER.
+        val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_DEFER))
+        var calls = 0
+        val deps =
+            makeDeps(mock, 0).copy(nowMonotonicNs = {
+                calls++
+                if (calls <= 2) 0L else 10_000L // after the response: the spec budget is gone
+            })
+        val outcome = gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), null, deps, testOptions)
+        assertTrue(outcome is GateOutcome.FailOpenPermit)
+        assertEquals("defer-budget-exhausted", outcome.reason)
+        assertEquals(1, mock.callCount(), "the ask happened before the Specification budget ran out")
+    }
+
+    @Test
     fun `missing eligible budget exhausts without clock or Decide`() {
         val spec = askAndBlockSpec().toBuilder().clearLatencyBudgetNanoseconds().build()
         val mock = MockDecider()
