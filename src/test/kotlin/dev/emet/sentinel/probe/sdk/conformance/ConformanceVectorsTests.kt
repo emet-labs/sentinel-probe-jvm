@@ -1,11 +1,24 @@
 package dev.emet.sentinel.probe.sdk.conformance
 
 import dev.emet.sentinel.model.v1.Int128
+import dev.emet.sentinel.model.v1.DeliveryMode
+import dev.emet.sentinel.model.v1.EvaluationMode
+import dev.emet.sentinel.model.v1.EventFilter
+import dev.emet.sentinel.model.v1.FailMode
 import dev.emet.sentinel.model.v1.ProducerEvent
 import dev.emet.sentinel.model.v1.SpecificationFilter
+import dev.emet.sentinel.model.v1.Readiness
 import dev.emet.sentinel.probe.sdk.config.JsonParser
 import dev.emet.sentinel.probe.sdk.int128.Int128Codec
 import dev.emet.sentinel.probe.sdk.internal.specmatch.SpecMatch
+import dev.emet.sentinel.probe.sdk.enforcement.DecideResult
+import dev.emet.sentinel.probe.sdk.enforcement.Deps
+import dev.emet.sentinel.probe.sdk.enforcement.GateOutcome
+import dev.emet.sentinel.probe.sdk.enforcement.Options
+import dev.emet.sentinel.probe.sdk.enforcement.gate
+import dev.emet.sentinel.probe.v1.DecideRequest
+import dev.emet.sentinel.probe.v1.DecideResponse
+import dev.emet.sentinel.probe.v1.DecisionAction
 import java.math.BigInteger
 import java.nio.file.Path
 import kotlin.test.Test
@@ -75,6 +88,68 @@ class ConformanceVectorsTests {
             val eventMap = vector["producer_event"] as Map<String, Any?>
             val event = ProducerEvent.newBuilder().setKind(eventMap["kind"] as String).build()
             assertEquals(vector["expected"], SpecMatch.selects(builder.build(), event), vector["id"] as String)
+        }
+    }
+
+    @Test
+    fun `enforcement scenarios execute the production gate`() {
+        val suite = load("enforcement-gate-v1.json")
+        val cases = suite["cases"] as List<Map<String, Any?>>
+        for (vector in cases) {
+            val accepted = mutableMapOf<String, FailMode>()
+            val fixtureFilter = vector["filter"] as Map<String, Any?>?
+            val filter = fixtureFilter?.let {
+                val builder = EventFilter.newBuilder().setEpoch((it["epoch"] as String).toLong())
+                for (fixture in it["specifications"] as List<Map<String, Any?>>) {
+                    val id = fixture["id"] as String
+                    accepted[id] = if (fixture["accepted_fail_mode"] == "closed") FailMode.FAIL_MODE_CLOSED else FailMode.FAIL_MODE_OPEN
+                    builder.addSpecifications(
+                        SpecificationFilter.newBuilder()
+                            .setSpecificationId(id)
+                            .setFailMode(if (fixture["fail_mode"] == "closed") FailMode.FAIL_MODE_CLOSED else FailMode.FAIL_MODE_OPEN)
+                            .setEvaluationMode(EvaluationMode.EVALUATION_MODE_ENFORCE)
+                            .setReadiness(Readiness.READINESS_ACTIVE)
+                            .setLatencyBudgetNanoseconds((fixture["latency_budget_ns"] as String).toLong())
+                            .setEventMatch(
+                                dev.emet.sentinel.model.v1.EventMatch.newBuilder()
+                                    .addAllEventKinds(fixture["event_kinds"] as List<String>)
+                                    .setDeliveryMode(if (fixture["delivery_mode"] == "ask_and_block") DeliveryMode.DELIVERY_MODE_ASK_AND_BLOCK else DeliveryMode.DELIVERY_MODE_SHIP_ASYNC),
+                            ),
+                    )
+                }
+                builder.build()
+            }
+            val reads = (vector["clock_reads_ns"] as List<String>).map(String::toLong)
+            var readIndex = 0
+            val requests = mutableListOf<DecideRequest>()
+            val decider = (vector["decider"] as Map<String, String>)["result"]!!
+            val actions = mapOf("permit" to DecisionAction.DECISION_ACTION_PERMIT, "deny" to DecisionAction.DECISION_ACTION_DENY, "defer" to DecisionAction.DECISION_ACTION_DEFER, "unspecified" to DecisionAction.DECISION_ACTION_UNSPECIFIED)
+            val outcome = gate(
+                ProducerEvent.newBuilder().setId("fixture-event").setKind((vector["event"] as Map<String, String>)["kind"]).build(),
+                filter,
+                (vector["local_deadline_ns"] as String?)?.toLong(),
+                Deps(
+                    decide = { request ->
+                        requests.add(request)
+                        if (decider == "transport_error") DecideResult.Err(IllegalStateException("fixture-transport-error")) else DecideResult.Ok(DecideResponse.newBuilder().setAction(actions.getValue(decider)).build())
+                    },
+                    nowMonotonicNs = { reads.getOrElse(readIndex++) { error("clock script exhausted") } },
+                    acceptedFailModeFor = { spec -> accepted.getValue(spec.specificationId) },
+                ),
+                Options("fixture-source", "fixture-request", "fixture-idempotency"),
+            )
+            val kind = when (outcome) {
+                is GateOutcome.NoFilter -> "no-filter"
+                is GateOutcome.Permit -> "permit"
+                is GateOutcome.Deny -> "deny"
+                is GateOutcome.Defer -> "defer"
+                is GateOutcome.FailOpenPermit -> "fail-open-permit"
+                is GateOutcome.FailClosedDeny -> "fail-closed-deny"
+            }
+            val expected = vector["expected"] as Map<String, Any?>
+            assertEquals(expected["kind"], kind, vector["id"] as String)
+            assertEquals((expected["decide_calls"] as Long).toInt(), requests.size)
+            assertEquals(reads.size, readIndex)
         }
     }
 }
