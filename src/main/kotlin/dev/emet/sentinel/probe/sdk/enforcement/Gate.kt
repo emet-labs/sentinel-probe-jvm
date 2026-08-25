@@ -18,6 +18,11 @@ import dev.emet.sentinel.probe.v1.SpecificationDecision
 //
 // Pure: no clock access, no side effects. The clock is injected through Deps.nowMonotonicNs
 // and never read inside, so budget behaviour is testable without sleeping.
+@Deprecated(
+    "Not called from gate() since the effective budget became a minimum over an " +
+        "anchor+relative-budget pair (BudgetState.remaining, below) rather than a single " +
+        "absolute deadline. Kept for API stability and exercised only by its own unit tests.",
+)
 public fun remainingTransportBudgetNs(
     deadlineNs: Long,
     nowNs: Long,
