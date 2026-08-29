@@ -595,4 +595,34 @@ class GateTests {
         assertEquals(0, clockCalls)
         assertEquals(0, mock.callCount())
     }
+
+    // Issue #123 asked whether an injected monotonic clock that FAILS (as opposed to one that
+    // is missing) should degrade to the aggregate fail mode with reason "clock-unavailable",
+    // or surface. The maintainer ruling on PR #127 is that it surfaces: a clock that is wired
+    // up but cannot be read is a caller bug, and there is no real-world scenario that makes it
+    // worth absorbing. The JVM port has always propagated, so this pins existing behaviour
+    // rather than changing it -- five of six SDKs had no coverage here at all, which is how
+    // the ports drifted apart. TypeScript's outlier catch is removed in the same change.
+    //
+    // The read exercised is the third and last one, after the DEFER response, so the throw has
+    // to travel back out through the response handler.
+    @Test
+    fun `a throwing monotonic clock propagates`() {
+        val mock = MockDecider(response = makeResponse(DecisionAction.DECISION_ACTION_DEFER))
+        var clockCalls = 0
+        val deps =
+            makeDeps(mock, 0).copy(nowMonotonicNs = {
+                clockCalls++
+                // error() is Kotlin idiom for IllegalStateException; detekt UseCheckOrError requires it.
+                if (clockCalls == 3) error("clock hardware fault")
+                0L
+            })
+        val thrown =
+            assertThrows<IllegalStateException> {
+                gate(makeEvent(testKind), makeFilter(u64(testEpoch), askAndBlockSpec()), i64(10000), deps, testOptions)
+            }
+        assertEquals("clock hardware fault", thrown.message)
+        assertEquals(3, clockCalls, "anchor, pre-call budget, post-DEFER re-check")
+        assertEquals(1, mock.callCount(), "the ask happened before the failing read")
+    }
 }
