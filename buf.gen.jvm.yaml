@@ -23,4 +23,4 @@ plugins:
   # Same pin as the repo-root buf.gen.yaml Java entry.
   - remote: buf.build/protocolbuffers/java:v33.4
     revision: 1
-    out: sdk/jvm/gen
+    out: gen

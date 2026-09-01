@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.5/.schema/devbox.schema.json",
+  "packages": [
+    "javaPackages.compiler.openjdk21@21.0.12+8",
+    "just@1.57.0",
+    "buf@1.72.0",
+    "cacert@3.126"
+  ]
+}
