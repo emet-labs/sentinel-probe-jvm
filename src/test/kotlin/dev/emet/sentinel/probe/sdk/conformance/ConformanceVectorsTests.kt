@@ -5,10 +5,14 @@ import dev.emet.sentinel.model.v1.EvaluationMode
 import dev.emet.sentinel.model.v1.EventFilter
 import dev.emet.sentinel.model.v1.FailMode
 import dev.emet.sentinel.model.v1.Int128
+import dev.emet.sentinel.model.v1.ProducerCompletenessSignal
 import dev.emet.sentinel.model.v1.ProducerEvent
 import dev.emet.sentinel.model.v1.Readiness
+import dev.emet.sentinel.model.v1.SourceActivityState
 import dev.emet.sentinel.model.v1.SpecificationFilter
+import dev.emet.sentinel.model.v1.VerdictOutcome
 import dev.emet.sentinel.probe.sdk.config.JsonParser
+import dev.emet.sentinel.probe.sdk.emission.SpanExportRefusal
 import dev.emet.sentinel.probe.sdk.enforcement.DecideResult
 import dev.emet.sentinel.probe.sdk.enforcement.Deps
 import dev.emet.sentinel.probe.sdk.enforcement.GateOutcome
@@ -16,13 +20,18 @@ import dev.emet.sentinel.probe.sdk.enforcement.Options
 import dev.emet.sentinel.probe.sdk.enforcement.gate
 import dev.emet.sentinel.probe.sdk.int128.Int128Codec
 import dev.emet.sentinel.probe.sdk.internal.specmatch.SpecMatch
+import dev.emet.sentinel.probe.sdk.otlp.InboundLog
+import dev.emet.sentinel.probe.sdk.otlp.OtlpCodec
 import dev.emet.sentinel.probe.v1.DecideRequest
 import dev.emet.sentinel.probe.v1.DecideResponse
 import dev.emet.sentinel.probe.v1.DecisionAction
+import io.opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest
+import io.opentelemetry.proto.logs.v1.LogRecord
 import java.math.BigInteger
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class ConformanceVectorsTests {
@@ -31,29 +40,40 @@ class ConformanceVectorsTests {
             .of(requireNotNull(System.getProperty("sentinel.repository.root")))
             .resolve("testdata/probe-sdk-conformance")
 
+    private fun load(name: String): Map<String, Any?> = loadVersion(name, "1.0.0")
+
     @Suppress("UNCHECKED_CAST")
-    private fun load(name: String): Map<String, Any?> {
+    private fun loadVersion(
+        name: String,
+        version: String,
+    ): Map<String, Any?> {
+        val value = loadUnchecked(name)
+        assertEquals(version, value["format_version"])
+        return value
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun loadUnchecked(name: String): Map<String, Any?> {
         val parser = JsonParser(root.resolve(name).toFile().readText())
         val value = parser.parseValue() as Map<String, Any?>
         parser.skipWhitespace()
         parser.expectEof()
-        assertEquals("1.0.0", value["format_version"])
         return value
     }
 
     @Test
     fun `manifest suite registry fails closed`() {
-        val manifest = load("manifest-v1.json")
+        val manifest = loadVersion("manifest-v1.json", "1.1.0")
         val suites = manifest["suites"] as List<Map<String, String>>
         assertEquals(
-            listOf("spec_match", "int128", "enforcement_gate"),
+            listOf("spec_match", "int128", "enforcement_gate", "otlp_signal"),
             suites.map { it.getValue("kind") },
         )
     }
 
     @Test
     fun `shared malformed corpus is rejected by category`() {
-        val manifest = load("manifest-v1.json")
+        val manifest = loadVersion("manifest-v1.json", "1.1.0")
         val fixtures = manifest["malformed"] as List<Map<String, String>>
         for (fixture in fixtures) {
             assertEquals(
@@ -240,4 +260,146 @@ class ConformanceVectorsTests {
             assertEquals(reads.size, readIndex)
         }
     }
+
+    @Test
+    @Suppress("UNCHECKED_CAST")
+    fun `otlp_signal vectors decode events and messages`() {
+        val suite = loadVersion("otlp-signal-v1.json", "1.1.0")
+        assertEquals("otlp_signal", suite["kind"])
+        val cases = suite["cases"] as List<Map<String, Any?>>
+        assertEquals(cases.size, cases.map { it["id"] }.toSet().size)
+        for (vector in cases) {
+            val bytes = root.resolve(vector.getValue("path") as String).toFile().readBytes()
+            when (vector.getValue("signal")) {
+                "trace" -> assertTrace(vector, bytes)
+                "completeness" -> assertCompleteness(vector, bytes)
+                "verdict" -> assertVerdict(vector, bytes)
+                "event_filter" -> assertFilter(vector, bytes)
+                "decide_response" -> assertDecision(vector, bytes)
+                else -> error(vector["signal"].toString())
+            }
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun assertTrace(
+        vector: Map<String, Any?>,
+        bytes: ByteArray,
+    ) {
+        if (vector["reject"] == true) {
+            assertFailsWith<SpanExportRefusal> { OtlpCodec.decodeTraceEvents(bytes) }
+            return
+        }
+        val events = OtlpCodec.decodeTraceEvents(bytes)
+        val expected = vector.getValue("events") as List<Map<String, Any?>>
+        assertEquals(expected.size, events.size, vector["id"] as String)
+        for ((event, want) in events.zip(expected)) {
+            assertEquals(want["id"], event.id, vector["id"] as String)
+            assertEquals(want["kind"], event.kind, vector["id"] as String)
+            assertEquals((want.getValue("sequence_epoch") as String).toLong(), event.sequence.epoch)
+            assertEquals((want.getValue("sequence_number") as String).toLong(), event.sequence.sequence)
+            assertEquals(want["predecessors"], event.causalPredecessorIdsList, vector["id"] as String)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun assertCompleteness(
+        vector: Map<String, Any?>,
+        bytes: ByteArray,
+    ) {
+        val want = vector.getValue("completeness") as Map<String, String>
+        val record = onlyLog(bytes)
+        assertEquals("sentinel.model.v1.ProducerCompletenessSignal", logString(record, "sentinel.payload.type"))
+        assertEquals(want.getValue("source_handle"), logString(record, "sentinel.source_handle"))
+        val signal = ProducerCompletenessSignal.parseFrom(record.body.bytesValue)
+        assertEquals(want.getValue("sequence_epoch").toLong(), signal.sequenceEpoch)
+        assertEquals(want.getValue("last_emitted").toLong(), signal.lastEmitted)
+        assertEquals(want.getValue("complete_through").toLong(), signal.completeThrough)
+        assertEquals(want.getValue("acknowledged_filter_epoch").toLong(), signal.acknowledgedFilterEpoch)
+        assertEquals(want.getValue("clock_domain_id"), signal.producerReportedAt.clockDomainId)
+        assertEquals(BigInteger(want.getValue("occurrence_ns")), Int128Codec.toBigInt(signal.producerReportedAt.nanoseconds))
+        assertEquals(want.getValue("uncertainty_nanoseconds").toLong(), signal.producerReportedAt.uncertaintyNanoseconds)
+        assertEquals(activity(want.getValue("activity")), signal.activity)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun assertVerdict(
+        vector: Map<String, Any?>,
+        bytes: ByteArray,
+    ) {
+        val want = vector.getValue("verdict") as Map<String, String>
+        val decoded = OtlpCodec.decodeInbound(bytes).single() as InboundLog.VerdictLog
+        assertEquals(want.getValue("id"), decoded.verdict.id)
+        assertEquals(outcome(want.getValue("outcome")), decoded.verdict.outcome)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun assertFilter(
+        vector: Map<String, Any?>,
+        bytes: ByteArray,
+    ) {
+        val want = vector.getValue("event_filter") as Map<String, Any?>
+        val decoded = OtlpCodec.decodeInbound(bytes).single() as InboundLog.FilterLog
+        assertEquals((want.getValue("epoch") as String).toLong(), decoded.filter.epoch)
+        assertEquals(want.getValue("specification_ids"), decoded.filter.specificationsList.map { it.specificationId })
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun assertDecision(
+        vector: Map<String, Any?>,
+        bytes: ByteArray,
+    ) {
+        val want = vector.getValue("decide_response") as Map<String, Any?>
+        val decoded = OtlpCodec.decodeInbound(bytes).single() as InboundLog.DecisionLog
+        assertEquals(want.getValue("request_id"), decoded.response.requestId)
+        assertEquals(action(want.getValue("action") as String), decoded.response.action)
+        val specs = want.getValue("specifications") as List<Map<String, String>>
+        assertEquals(specs.size, decoded.response.specificationsCount)
+        for ((spec, got) in specs.zip(decoded.response.specificationsList)) {
+            assertEquals(spec.getValue("id"), got.specificationId)
+            assertEquals(action(spec.getValue("action")), got.action)
+        }
+    }
+
+    private fun onlyLog(bytes: ByteArray): LogRecord {
+        val records =
+            ExportLogsServiceRequest
+                .parseFrom(bytes)
+                .resourceLogsList
+                .flatMap { resource -> resource.scopeLogsList.flatMap { it.logRecordsList } }
+        assertEquals(1, records.size)
+        return records[0]
+    }
+
+    private fun logString(
+        record: LogRecord,
+        key: String,
+    ): String? =
+        record.attributesList
+            .firstOrNull { it.key == key }
+            ?.value
+            ?.stringValue
+
+    private fun activity(token: String): SourceActivityState =
+        when (token) {
+            "active" -> SourceActivityState.SOURCE_ACTIVITY_STATE_ACTIVE
+            "idle" -> SourceActivityState.SOURCE_ACTIVITY_STATE_INTENTIONALLY_IDLE
+            else -> error(token)
+        }
+
+    private fun outcome(token: String): VerdictOutcome =
+        when (token) {
+            "satisfy" -> VerdictOutcome.VERDICT_OUTCOME_SATISFY
+            "violate" -> VerdictOutcome.VERDICT_OUTCOME_VIOLATE
+            "inconclusive" -> VerdictOutcome.VERDICT_OUTCOME_INCONCLUSIVE
+            else -> error(token)
+        }
+
+    private fun action(token: String): DecisionAction =
+        when (token) {
+            "permit" -> DecisionAction.DECISION_ACTION_PERMIT
+            "deny" -> DecisionAction.DECISION_ACTION_DENY
+            "defer" -> DecisionAction.DECISION_ACTION_DEFER
+            else -> error(token)
+        }
 }
