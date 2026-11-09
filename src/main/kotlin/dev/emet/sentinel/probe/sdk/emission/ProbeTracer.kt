@@ -1,11 +1,11 @@
 // ProbeTracer bundles the tracer a Probe emits with, its provider, and the conversion into
 // ProducerEvents. Kotlin analog of sdk/go/emission/tracer.go.
 //
-// Divergence from the Go reference: this ProbeTracer accepts an EXISTING TracerProvider and
-// never starts its own, per the plan's ADR-0002 reading — the host owns export, so the host
-// builds the TracerProvider (with whichever span processors, samplers and resource it wants)
-// and hands it to the SDK. The SDK never decides where spans go. The Go reference builds a
-// provider for convenience; here that convenience would hide export wiring from the host.
+// The host still builds the TracerProvider. The Probe wire is the ADR-0002 addendum: ended
+// spans leave through OtlpHttpExporter (OTLP/HTTP protobuf), which the host points at the
+// Sentinel base URL. This type does not start that exporter and does not shut the provider
+// down. The Go reference builds a provider for convenience; hiding the base URL inside this
+// constructor would hide the wire from the host.
 package dev.emet.sentinel.probe.sdk.emission
 
 import dev.emet.sentinel.model.v1.ProducerEvent
@@ -27,9 +27,9 @@ public class ProbeTracer(
     // mirroring the reference's ProbeTracer.toEvent.
     public fun toEvent(conversion: SpanConversion): ProducerEvent = spanToEvent(conversion)
 
-    // newProbeTracer builds a ProbeTracer over an existing SdkTracerProvider. The host is
-    // expected to attach a ProbeSpanProcessor (and its exporter) to the provider's builder
-    // before this call; the SDK never attaches processors itself.
+    // newProbeTracer builds a ProbeTracer over an existing SdkTracerProvider. The host
+    // attaches OtlpExportingSpanProcessor, or calls OtlpHttpExporter itself, before spans
+    // end. This constructor does not attach a processor.
     public companion object {
         @JvmStatic
         public fun newProbeTracer(

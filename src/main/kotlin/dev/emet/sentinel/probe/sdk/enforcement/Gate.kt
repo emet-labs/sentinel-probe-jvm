@@ -100,8 +100,9 @@ public sealed class GateOutcome {
 // Deps are the effects the gate needs, all injected so the gate itself stays pure and testable
 // without a network or a clock.
 public data class Deps(
-    // decide performs the ask. In production this wraps SentinelTransport.decide; in tests it
-    // is a stub. Returns null for the response to model a transport that yielded nothing.
+    // decide performs the ask. In production this reads a DecideResponse the OTLP log
+    // receiver already decoded. It does not call Connect. Tests pass a stub. A null
+    // response models a transport that yielded nothing.
     public val decide: (request: DecideRequest) -> DecideResult,
     // nowMonotonicNs reads the host's monotonic clock. Required whenever deadlineNs is set.
     public val nowMonotonicNs: () -> Long,

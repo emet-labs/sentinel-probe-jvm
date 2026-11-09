@@ -17,7 +17,8 @@ import io.opentelemetry.sdk.trace.SpanProcessor
 import io.opentelemetry.sdk.trace.data.SpanData
 
 // ProbeSpanProcessor forwards every ended span's SpanData to a host callback. The callback is
-// the emission seam: a Probe implements it to run spanToEvent + ApplyFilter + gate.
+// the emission seam: a Probe implements it to run spanToEvent, or attaches
+// OtlpExportingSpanProcessor to post the ended span on the OTLP wire.
 public class ProbeSpanProcessor(
     // onEnd is invoked synchronously on span end with the span's SpanData. It must not block on
     // network: the enforcement gate's injected decide dependency is where blocking work belongs.

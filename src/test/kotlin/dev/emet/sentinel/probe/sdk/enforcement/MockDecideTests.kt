@@ -14,8 +14,9 @@ import kotlin.test.assertTrue
 // and Go's mockdecide_test.go: a canned response, a scripted sequence whose last element
 // repeats, or a forced error, while recording every request and the call count.
 //
-// Deliberately not an HTTP server: the gate calls the dependency function directly, and
-// ConnectLoopbackTests / TransportTests cover the real wire separately.
+// Deliberately not an HTTP server: the gate calls the dependency function directly.
+// The live decision is an OTLP log, and GateDoesNotCallConnectTests fails if that call
+// posts the Decide RPC.
 class MockDecider(
     var response: DecideResponse? = null,
     private val sequence: List<DecideResponse> = emptyList(),

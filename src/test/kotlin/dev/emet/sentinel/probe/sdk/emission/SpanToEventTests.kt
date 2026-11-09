@@ -17,10 +17,10 @@ import io.opentelemetry.sdk.trace.data.LinkData
 import io.opentelemetry.sdk.trace.data.SpanData
 import io.opentelemetry.sdk.trace.data.StatusData
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SpanToEventTests {
@@ -296,74 +296,85 @@ class SpanToEventTests {
     }
 
     @Test
-    fun `missing link event id falls back to span id and reports`() {
-        val malformed = mutableListOf<Pair<String, String>>()
-        val event =
-            spanToEvent(
-                SpanConversion(
-                    span = span(links = listOf(LinkData.create(validLink, Attributes.empty()))),
-                    schemaVersion = "v",
-                    eventID = "e",
-                    onMalformedLink = { source, spanID -> malformed.add(source to spanID) },
-                ),
-            )
-        assertEquals(listOf("2122232425262728"), event.causalPredecessorIdsList, "fallback to the link's hex span id")
-        assertEquals(listOf(MALFORMED_LINK_SOURCE_LINK to "2122232425262728"), malformed)
+    fun `missing link event id refuses the export and does not store the span id`() {
+        val error =
+            assertThrows<MissingPredecessorId> {
+                spanToEvent(
+                    SpanConversion(
+                        span = span(links = listOf(LinkData.create(validLink, Attributes.empty()))),
+                        schemaVersion = "v",
+                        eventID = "e",
+                    ),
+                )
+            }
+        assertEquals(MALFORMED_LINK_SOURCE_LINK, error.source)
+        assertEquals("2122232425262728", error.spanId)
+        assertFalse(error.message!!.contains("causalPredecessorIds"))
     }
 
     @Test
-    fun `missing parent event id falls back to span id and reports`() {
-        val malformed = mutableListOf<Pair<String, String>>()
-        val event =
-            spanToEvent(
-                SpanConversion(
-                    span = span(parent = validParent),
-                    schemaVersion = "v",
-                    eventID = "e",
-                    onMalformedLink = { source, spanID -> malformed.add(source to spanID) },
-                ),
-            )
-        assertEquals(listOf("1112131415161718"), event.causalPredecessorIdsList, "fallback to the parent's hex span id")
-        assertEquals(listOf(MALFORMED_LINK_SOURCE_PARENT to "1112131415161718"), malformed)
+    fun `missing parent event id refuses the export and does not store the span id`() {
+        val error =
+            assertThrows<MissingPredecessorId> {
+                spanToEvent(
+                    SpanConversion(
+                        span = span(parent = validParent),
+                        schemaVersion = "v",
+                        eventID = "e",
+                    ),
+                )
+            }
+        assertEquals(MALFORMED_LINK_SOURCE_PARENT, error.source)
+        assertEquals("1112131415161718", error.spanId)
     }
 
     @Test
-    fun `mistyped reserved attribute takes the fallback path`() {
-        // A non-string value under a reserved key is treated as absent, matching the reference's
-        // typeof guard, rather than being coerced into a garbage event id.
-        val malformed = mutableListOf<String>()
-        val event =
-            spanToEvent(
-                SpanConversion(
-                    span =
-                        span(
-                            parent = validParent,
-                            attributes = Attributes.of(AttributeKey.longKey(ATTRIBUTE_PARENT_EVENT_ID), 7L),
-                        ),
-                    schemaVersion = "v",
-                    eventID = "e",
-                    onMalformedLink = { source, _ -> malformed.add(source) },
-                ),
-            )
-        assertEquals(listOf("1112131415161718"), event.causalPredecessorIdsList)
-        assertEquals(listOf(MALFORMED_LINK_SOURCE_PARENT), malformed)
-        assertEquals(0, event.attributesList.size, "a reserved key stays excluded even when mistyped")
+    fun `mistyped reserved attribute refuses the export`() {
+        // A non-string value under a reserved key is absent, so a real parent span has no event id.
+        val error =
+            assertThrows<MissingPredecessorId> {
+                spanToEvent(
+                    SpanConversion(
+                        span =
+                            span(
+                                parent = validParent,
+                                attributes = Attributes.of(AttributeKey.longKey(ATTRIBUTE_PARENT_EVENT_ID), 7L),
+                            ),
+                        schemaVersion = "v",
+                        eventID = "e",
+                    ),
+                )
+            }
+        assertEquals(MALFORMED_LINK_SOURCE_PARENT, error.source)
+        assertEquals("1112131415161718", error.spanId)
+    }
+
+    @Test
+    fun `unknown sentinel attribute refuses the export`() {
+        val error =
+            assertThrows<SpanExportRefusal> {
+                spanToEvent(
+                    SpanConversion(
+                        span = span(attributes = Attributes.of(AttributeKey.stringKey("sentinel.extra"), "nope")),
+                        schemaVersion = "v",
+                        eventID = "e",
+                    ),
+                )
+            }
+        assertTrue(error.message!!.contains("sentinel.extra"))
     }
 
     @Test
     fun `no parent and no links yields no predecessors`() {
-        var called = false
         val event =
             spanToEvent(
                 SpanConversion(
                     span = span(),
                     schemaVersion = "v",
                     eventID = "e",
-                    onMalformedLink = { _, _ -> called = true },
                 ),
             )
         assertEquals(0, event.causalPredecessorIdsList.size)
-        assertFalse(called, "no edges means no malformed-link reports")
     }
 
     @Test
@@ -375,17 +386,16 @@ class SpanToEventTests {
     }
 
     @Test
-    fun `null onMalformedLink is safe`() {
-        val event =
+    fun `non-finite double refuses the export`() {
+        assertThrows<SpanExportRefusal> {
             spanToEvent(
                 SpanConversion(
-                    span = span(links = listOf(LinkData.create(validLink, Attributes.empty()))),
+                    span = span(attributes = Attributes.of(AttributeKey.doubleKey("ratio"), Double.NaN)),
                     schemaVersion = "v",
                     eventID = "e",
-                    onMalformedLink = null,
                 ),
             )
-        assertEquals(1, event.causalPredecessorIdsList.size, "the fallback must still be recorded without a callback")
+        }
     }
 
     @Test
@@ -427,7 +437,7 @@ class SpanToEventTests {
                 .build()
         val tracer = ProbeTracer.newProbeTracer(provider, "probe.test")
         assertNotNull(tracer.tracer)
-        // The SDK never attaches a span processor or exporter: there is nothing to flush.
+        // ProbeTracer does not attach a processor. The host attaches OtlpExportingSpanProcessor.
         assertTrue(provider.forceFlush().isSuccess)
         assertTrue(provider.shutdown().isSuccess)
     }

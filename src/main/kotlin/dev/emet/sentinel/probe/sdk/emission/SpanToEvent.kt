@@ -1,8 +1,9 @@
 // Package emission converts OTel Java spans into sentinel.model.v1.ProducerEvent values.
 // Kotlin analog of sdk/go/emission/ (spantoevent.go, tracer.go).
 //
-// The SDK does not own export. ADR-0002 makes OTel an adapter, not the substrate: this package
-// produces spans and converts them, and the host wires the OTLP exporter.
+// ADR-0002 makes OTel an adapter, not the substrate. The Probe-wire addendum excepts the
+// wire itself: this package converts ended spans, and OtlpHttpExporter posts them as
+// OTLP/HTTP protobuf. Canonical Events stay the model the conversion produces.
 //
 // # Producer contract for causal edges
 //
@@ -16,11 +17,11 @@
 //   - for the parent, the producer threads the parent's event ID into the child span's
 //     attributes under "sentinel.parent.event.id".
 //
-// spanToEvent reads predecessors from exactly those places. It falls back to the hex span ID
-// only when the attribute is absent, and reports every such fallback through
-// SpanConversion.onMalformedLink, because a fallback means the producer contract was violated
-// and the resulting edge is not joinable with anything else. Both reserved keys are excluded
-// from ProducerEvent.attributes: they carry causal-edge metadata, not domain data.
+// spanToEvent reads predecessors from exactly those places. A parent span or a link whose
+// event id is absent fails the export. The hex span id is not stored as causality: the
+// ADR-0002 Probe-wire addendum says causal ids are event ids, and a missing one is missing
+// evidence. Contract keys are excluded from ProducerEvent.attributes. Any other sentinel.*
+// key fails the export rather than being copied as domain data.
 //
 // # Attribute mapping
 //
@@ -66,10 +67,45 @@ import io.opentelemetry.sdk.trace.data.SpanData
 // ProducerEvent attributes. Same string constants as the TypeScript/Go references.
 public const val ATTRIBUTE_EVENT_ID: String = "sentinel.event.id"
 public const val ATTRIBUTE_PARENT_EVENT_ID: String = "sentinel.parent.event.id"
+public const val ATTRIBUTE_SEQUENCE_EPOCH: String = "sentinel.sequence.epoch"
+public const val ATTRIBUTE_SEQUENCE_NUMBER: String = "sentinel.sequence.number"
+public const val ATTRIBUTE_SCHEMA_VERSION: String = "sentinel.schema.version"
+public const val ATTRIBUTE_ACKNOWLEDGED_FILTER_EPOCH: String = "sentinel.acknowledged_filter_epoch"
+public const val ATTRIBUTE_CLAIMED_SENSITIVITY: String = "sentinel.claimed_sensitivity"
+public const val ATTRIBUTE_CLAIMED_CAPABILITIES: String = "sentinel.claimed_capabilities"
 
-// Malformed-link sources reported through SpanConversion.onMalformedLink.
+// Where a missing predecessor was required. The span id named alongside it is diagnostic
+// only and is never written onto the ProducerEvent.
 public const val MALFORMED_LINK_SOURCE_PARENT: String = "parent"
 public const val MALFORMED_LINK_SOURCE_LINK: String = "link"
+
+// Contract keys are metadata on the OTLP span. They are not domain attributes.
+internal val CONTRACT_ATTRIBUTE_KEYS: Set<String> =
+    setOf(
+        ATTRIBUTE_EVENT_ID,
+        ATTRIBUTE_PARENT_EVENT_ID,
+        ATTRIBUTE_SEQUENCE_EPOCH,
+        ATTRIBUTE_SEQUENCE_NUMBER,
+        ATTRIBUTE_SCHEMA_VERSION,
+        ATTRIBUTE_ACKNOWLEDGED_FILTER_EPOCH,
+        ATTRIBUTE_CLAIMED_SENSITIVITY,
+        ATTRIBUTE_CLAIMED_CAPABILITIES,
+    )
+
+// SpanExportRefusal is a failed export. Nothing from the span is emitted.
+public open class SpanExportRefusal(
+    message: String,
+    cause: Throwable? = null,
+) : IllegalArgumentException(message, cause)
+
+// MissingPredecessorId is a parent or link that would have fallen back to a span id.
+// The export stops. spanId is the hex id that was not stored.
+public class MissingPredecessorId(
+    public val source: String,
+    public val spanId: String,
+) : SpanExportRefusal(
+        "refusing export: $source has no sentinel event id; span id $spanId is not a causal predecessor",
+    )
 
 // SpanConversion is everything spanToEvent needs beyond the span itself. Named SpanConversion
 // rather than SpanContext (the TypeScript name) because OTel's SpanContext appears in this very
@@ -95,10 +131,6 @@ public data class SpanConversion(
     public val claimedSensitivity: Sensitivity = Sensitivity.SENSITIVITY_UNSPECIFIED,
     // eventID is the reserved sentinel.event.id the producer assigned at span start.
     public val eventID: String,
-    // onMalformedLink, when non-null, is called once per causal predecessor that had to fall
-    // back to a hex span ID because the producer contract was violated. source is
-    // MALFORMED_LINK_SOURCE_PARENT or MALFORMED_LINK_SOURCE_LINK.
-    public val onMalformedLink: ((source: String, spanID: String) -> Unit)? = null,
 )
 
 // spanToEvent converts an ended OTel span into a ProducerEvent.
@@ -117,7 +149,7 @@ public fun spanToEvent(conversion: SpanConversion): ProducerEvent {
             .setOccurrenceTime(buildOccurrenceTime(span))
             .addAllAttributes(mapAttributes(span.attributes))
             .setClaimedSensitivity(conversion.claimedSensitivity)
-            .addAllCausalPredecessorIds(collectCausalPredecessors(span, conversion.onMalformedLink))
+            .addAllCausalPredecessorIds(collectCausalPredecessors(span))
     if (conversion.sequence != null) builder.setSequence(conversion.sequence)
     if (conversion.acknowledgedEpoch != null) builder.setAcknowledgedFilterEpoch(conversion.acknowledgedEpoch)
     if (conversion.claimedCapabilities.isNotEmpty()) builder.addAllClaimedCapabilities(conversion.claimedCapabilities)
@@ -147,7 +179,12 @@ private fun mapAttributes(attributes: Attributes): List<AttributeEntry> {
     val entries = ArrayList<AttributeEntry>(attributes.size())
     attributes.forEach { key, value ->
         val name = key.key
-        if (name == ATTRIBUTE_EVENT_ID || name == ATTRIBUTE_PARENT_EVENT_ID) return@forEach // reserved
+        if (name.startsWith("sentinel.")) {
+            if (name !in CONTRACT_ATTRIBUTE_KEYS) {
+                throw SpanExportRefusal("unknown sentinel attribute $name")
+            }
+            return@forEach
+        }
         val mapped = mapValue(key.type, value) ?: return@forEach // EMPTY / unmapped -> skip
         entries.add(
             AttributeEntry
@@ -171,7 +208,11 @@ private fun mapValue(
         AttributeType.STRING -> AttributeValue.newBuilder().setStringValue(value as String).build()
         AttributeType.BOOLEAN -> AttributeValue.newBuilder().setBoolValue(value as Boolean).build()
         AttributeType.LONG -> AttributeValue.newBuilder().setIntegerValue(value as Long).build()
-        AttributeType.DOUBLE -> AttributeValue.newBuilder().setDoubleValue(value as Double).build()
+        AttributeType.DOUBLE -> {
+            val number = value as Double
+            if (!number.isFinite()) throw SpanExportRefusal("non-finite double")
+            AttributeValue.newBuilder().setDoubleValue(number).build()
+        }
         AttributeType.STRING_ARRAY -> arrayValue((value as List<String>).map { mapValue(AttributeType.STRING, it) })
         AttributeType.BOOLEAN_ARRAY -> arrayValue((value as List<Boolean>).map { mapValue(AttributeType.BOOLEAN, it) })
         AttributeType.LONG_ARRAY -> arrayValue((value as List<Long>).map { mapValue(AttributeType.LONG, it) })
@@ -188,37 +229,42 @@ private fun arrayValue(values: List<AttributeValue?>): AttributeValue {
 }
 
 // collectCausalPredecessors reads the parent edge and every link edge, in that order.
-private fun collectCausalPredecessors(
-    span: SpanData,
-    onMalformedLink: ((source: String, spanID: String) -> Unit)?,
-): List<String> {
+private fun collectCausalPredecessors(span: SpanData): List<String> {
     val predecessors = ArrayList<String>()
 
     // Parent: the child span carries the parent's event ID under the reserved key.
+    // A valid parent span context without that attribute is a missing causal id.
     val parentEventID = stringAttribute(span.attributes, ATTRIBUTE_PARENT_EVENT_ID)
     if (parentEventID != null) {
         predecessors.add(parentEventID)
     } else {
         val parent = span.parentSpanContext
         if (parent.isValid) {
-            val spanID = parent.spanId
-            predecessors.add(spanID)
-            onMalformedLink?.invoke(MALFORMED_LINK_SOURCE_PARENT, spanID)
+            throw MissingPredecessorId(MALFORMED_LINK_SOURCE_PARENT, parent.spanId)
         }
     }
 
     // Links: each link carries its target's event ID in that link's OWN attributes.
+    // The link's span id is not a substitute.
     for (link in span.links) {
+        rejectUnknownSentinelKeys(link.attributes)
         val linkEventID = stringAttribute(link.attributes, ATTRIBUTE_EVENT_ID)
         if (linkEventID != null) {
             predecessors.add(linkEventID)
             continue
         }
-        val spanID = link.spanContext.spanId
-        predecessors.add(spanID)
-        onMalformedLink?.invoke(MALFORMED_LINK_SOURCE_LINK, spanID)
+        throw MissingPredecessorId(MALFORMED_LINK_SOURCE_LINK, link.spanContext.spanId)
     }
     return predecessors
+}
+
+private fun rejectUnknownSentinelKeys(attributes: Attributes) {
+    attributes.forEach { key, _ ->
+        val name = key.key
+        if (name.startsWith("sentinel.") && name != ATTRIBUTE_EVENT_ID) {
+            throw SpanExportRefusal("unknown sentinel attribute $name")
+        }
+    }
 }
 
 // stringAttribute returns the value of key when it is present AND holds a string. A non-string

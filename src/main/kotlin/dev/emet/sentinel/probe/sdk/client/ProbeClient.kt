@@ -1,5 +1,6 @@
 package dev.emet.sentinel.probe.sdk.client
 
+import dev.emet.sentinel.probe.sdk.otlp.OtlpLogReceiver
 import dev.emet.sentinel.probe.v1.DecideRequest
 
 // ProbeClient owns the Probe's filter state and builds decision requests against it.
@@ -9,9 +10,10 @@ import dev.emet.sentinel.probe.v1.DecideRequest
 public class ProbeClient(
     // config carries the Probe's identity and the Sentinel it talks to.
     public val config: Config,
-    // decider performs the Decide RPC. In production this is a SentinelTransport; in tests it
-    // is a stub. The decider is a REQUIRED parameter with no default: a silently-defaulted
-    // transport hides a misconfigured endpoint until the first enforcement call.
+    // decider returns the DecideResponse the OTLP log receiver decoded for this request.
+    // In tests it is a stub. It is a REQUIRED parameter with no default: a silently-defaulted
+    // transport would hide a missing log until the first enforcement call. Connect is not
+    // a production decider.
     private val decider: (DecideRequest) -> dev.emet.sentinel.probe.sdk.enforcement.DecideResult,
 ) {
     private val store: FilterStore = FilterStore.newFilterStore(config.initialFilter)
@@ -84,4 +86,20 @@ public class ProbeClient(
     // decideFunc exposes the decide dependency the enforcement gate's Deps.decide expects, so a
     // host does not have to adapt the decider by hand.
     public fun decideFunc(): (DecideRequest) -> dev.emet.sentinel.probe.sdk.enforcement.DecideResult = decider
+
+    public companion object {
+        // fromLogReceiver wires the OTLP log receiver as the only decision path and applies
+        // EventFilter logs to this client. Decide is not called.
+        @JvmStatic
+        public fun fromLogReceiver(
+            config: Config,
+            receiver: OtlpLogReceiver,
+        ): ProbeClient {
+            val client = ProbeClient(config, receiver::decide)
+            receiver.addFilterListener { filter ->
+                client.setFilter(filter)
+            }
+            return client
+        }
+    }
 }

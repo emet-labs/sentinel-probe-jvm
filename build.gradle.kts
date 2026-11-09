@@ -32,9 +32,11 @@ kotlin {
 dependencies {
     // Matches BSR buf.build/protocolbuffers/java:v33.4 runtime requirements.
     implementation("com.google.protobuf:protobuf-java:4.33.4")
-    // ADR-0002: OTel is an adapter, not the substrate. The host owns export.
+    // ADR-0002: OTel is an adapter, not the substrate. The Probe-wire addendum exports
+    // OTLP/HTTP protobuf. The proto jar is the v1.5.0 messages the ingest decoder uses.
     implementation("io.opentelemetry:opentelemetry-sdk:1.47.0")
     implementation("io.opentelemetry:opentelemetry-api:1.47.0")
+    implementation("io.opentelemetry.proto:opentelemetry-proto:1.5.0-alpha")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")
     testImplementation("io.kotest:kotest-property:5.9.1")
@@ -53,6 +55,10 @@ tasks.test {
         events("passed", "skipped", "failed")
     }
     systemProperty("sentinel.repository.root", rootProject.projectDir.parentFile.parentFile.absolutePath)
+    val peripheryBin = System.getenv("SENTINEL_PERIPHERY_BIN")
+    if (!peripheryBin.isNullOrBlank()) {
+        systemProperty("sentinel.periphery.bin", peripheryBin)
+    }
 }
 
 ktlint {

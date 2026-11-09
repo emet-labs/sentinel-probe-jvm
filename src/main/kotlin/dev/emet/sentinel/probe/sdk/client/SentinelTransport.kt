@@ -1,9 +1,8 @@
-// Transport — Connect-over-Java-HttpClient client for Sentinel's decision endpoint.
+// Transport — a retained Connect client for the historical Decide RPC framing.
+// The gate does not use it. A DecideResponse reaches the gate only from OtlpLogReceiver.
 // Kotlin analog of sdk/go/client/transport.go and sdk/python/.../transport.py.
 //
-// Connect is the right transport for the same reasons the Go and TypeScript references chose
-// it: it is built directly on HTTP/1.1 (the JDK's java.net.http.HttpClient is the stdlib
-// equivalent), which is exactly the "stdlib host language" issue #33 names.
+// The JDK HttpClient is the stdlib HTTP stack issue #33 names.
 //
 // There is no official Connect library for the JVM that targets Kotlin without extra ceremony,
 // so — like the Python SDK — this is a hand-written transport: it issues a POST with
@@ -151,21 +150,3 @@ private fun readJsonString(
     }
     return sb.toString()
 }
-
-// decideFunc adapts a SentinelTransport to the enforcement gate's decide dependency shape
-// (DecideResult). Driving the shipped adapter here rather than a local copy is the point: this
-// exercises the production path end to end. Errors are returned unwrapped so the gate can
-// classify ConnectError distinctly from a raw transport error.
-// This boundary intentionally converts every transport Throwable into Err; the gate then applies
-// the Specification's declared fail mode as required by ADR-0023.
-@Suppress("TooGenericExceptionCaught")
-public fun decideFunc(transport: SentinelTransport): (DecideRequest) -> dev.emet.sentinel.probe.sdk.enforcement.DecideResult =
-    { request ->
-        try {
-            dev.emet.sentinel.probe.sdk.enforcement.DecideResult
-                .Ok(transport.decide(request))
-        } catch (t: Throwable) {
-            dev.emet.sentinel.probe.sdk.enforcement.DecideResult
-                .Err(t)
-        }
-    }
