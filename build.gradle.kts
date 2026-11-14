@@ -31,6 +31,8 @@ buildscript {
 
 plugins {
     kotlin("jvm") version "2.4.10"
+    `java-library`
+    `maven-publish`
     id("org.jlleitschuh.gradle.ktlint") version "12.3.0"
     id("io.gitlab.arturbosch.detekt") version "1.23.8"
 }
@@ -56,14 +58,44 @@ kotlin {
     jvmToolchain(21)
 }
 
+java {
+    withSourcesJar()
+}
+
+// Maven coordinates dev.emet.sentinel:sentinel-probe-sdk-jvm:<version> (group and version come from
+// gradle.properties). The public API surfaces protobuf and OpenTelemetry types, so those are `api`
+// dependencies and land in the POM's compile scope. `-PsentinelMavenRepo=<dir>` (or the
+// SENTINEL_MAVEN_REPO environment variable) names the repository `publish` writes to; a SagaShop-style
+// consumer build publishes into a directory inside its own build and resolves from it offline.
+publishing {
+    publications {
+        create<MavenPublication>("probeSdk") {
+            from(components["java"])
+            pom {
+                name.set("Sentinel Probe SDK (JVM)")
+                description.set("Sentinel Probe SDK for the JVM: sequence allocation, completeness heartbeat, OTLP/HTTP export.")
+            }
+        }
+    }
+    repositories {
+        val repo = (findProperty("sentinelMavenRepo") as String?) ?: System.getenv("SENTINEL_MAVEN_REPO")
+        if (!repo.isNullOrBlank()) {
+            maven {
+                name = "sentinelRepo"
+                url = uri(repo)
+            }
+        }
+    }
+}
+
 dependencies {
     // Matches BSR buf.build/protocolbuffers/java:v33.4 runtime requirements.
-    implementation("com.google.protobuf:protobuf-java:4.33.4")
+    api("com.google.protobuf:protobuf-java:4.33.4")
     // ADR-0002: OTel is an adapter, not the substrate. The Probe-wire addendum exports
     // OTLP/HTTP protobuf. The proto jar is the v1.5.0 messages the ingest decoder uses.
-    implementation("io.opentelemetry:opentelemetry-sdk:1.47.0")
-    implementation("io.opentelemetry:opentelemetry-api:1.47.0")
-    implementation("io.opentelemetry.proto:opentelemetry-proto:1.5.0-alpha")
+    api("io.opentelemetry:opentelemetry-sdk:1.47.0")
+    api("io.opentelemetry:opentelemetry-api:1.47.0")
+    api("io.opentelemetry.proto:opentelemetry-proto:1.5.0-alpha")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")
     testImplementation("io.kotest:kotest-property:5.9.1")
