@@ -6,6 +6,28 @@
 // time beyond the regular dependency resolution.
 //
 // JDK 21 LTS is the floor (the Kotlin 2.4.10 / Java 21 toolchain that ships via devbox).
+//
+// Dependency resolution is locked and verified (#494). Every configuration, including the
+// plugin classpath below, resolves only what gradle.lockfile / buildscript-gradle.lockfile
+// record, and STRICT mode also fails a locked configuration that has no lock state at all.
+// STRICT has to be set twice: `buildscript.dependencyLocking` is a separate extension from
+// the project's, so the project block further down does not reach the plugin classpath.
+// gradle/verification-metadata.xml checks the SHA-256 of every artifact, which also covers
+// detached configurations that locking cannot see. Regenerate all three with
+// `just lock-sdk-jvm` (networked); tools/test-gradle-lock-drift.sh proves on the gate that
+// an unlocked dependency, a missing plugin-classpath lock file and a corrupted checksum
+// each fail.
+
+// Must precede `plugins {}`: it locks the plugin classpath, which the plugins DSL resolves
+// through this configuration (plugin markers included).
+buildscript {
+    dependencyLocking {
+        lockMode.set(LockMode.STRICT)
+    }
+    configurations.classpath {
+        resolutionStrategy.activateDependencyLocking()
+    }
+}
 
 plugins {
     kotlin("jvm") version "2.4.10"
@@ -15,6 +37,11 @@ plugins {
 
 repositories {
     mavenCentral()
+}
+
+dependencyLocking {
+    lockAllConfigurations()
+    lockMode.set(LockMode.STRICT)
 }
 
 // Generated Java proto types are a source root, not a dependency: tools/generate-jvm-sdk.sh
