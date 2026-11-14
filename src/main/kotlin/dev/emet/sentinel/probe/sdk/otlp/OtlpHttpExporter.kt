@@ -18,18 +18,43 @@ import java.time.Duration
 // OtlpTransportException is an HTTP failure. The span was not accepted. statusCode is the HTTP
 // status, null when no response arrived (connect failure, timeout, interrupt). responseBody is
 // the start of the response body (at most 500 characters), empty when there is none; it is also
-// in the message.
+// in the message. retryAfterMillis is the server's Retry-After on a 429 or 503 (delta-seconds
+// or an HTTP-date), null when absent, unparseable or on any other status.
 public class OtlpTransportException(
     message: String,
     cause: Throwable? = null,
     public val statusCode: Int? = null,
     public val responseBody: String = "",
+    public val retryAfterMillis: Long? = null,
 ) : RuntimeException(message, cause) {
-    // isRetryable is true for a failure a later attempt can fix: no response, 408, 425, 429 and
-    // every 5xx. Any other status (400, 409, ...) is a verdict on the payload; repeating it
-    // changes nothing.
+    // isRetryable is the Probe SDK retry policy (sdk/README.md): true for no response and for
+    // HTTP 408, 425, 429, 500, 502, 503 and 504. Any other status (400, 409, 501, ...) is a
+    // verdict on the payload; repeating it changes nothing.
     public val isRetryable: Boolean
-        get() = statusCode == null || statusCode == 408 || statusCode == 425 || statusCode == 429 || statusCode in 500..599
+        get() = statusCode == null || statusCode in RETRYABLE_STATUSES
+
+    internal companion object {
+        val RETRYABLE_STATUSES: Set<Int> = setOf(408, 425, 429, 500, 502, 503, 504)
+
+        // parseRetryAfter reads a Retry-After header, honored on 429 and 503 only.
+        fun parseRetryAfter(
+            status: Int,
+            header: String?,
+            now: java.time.Instant = java.time.Instant.now(),
+        ): Long? {
+            if (header == null || (status != 429 && status != 503)) return null
+            val text = header.trim()
+            if (text.isNotEmpty() && text.all { it in '0'..'9' }) {
+                return text.toLongOrNull()?.coerceAtMost(Long.MAX_VALUE / 1000)?.times(1000)
+            }
+            return try {
+                val at = java.time.ZonedDateTime.parse(text, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+                Duration.between(now, at.toInstant()).toMillis().coerceAtLeast(0)
+            } catch (ignored: java.time.format.DateTimeParseException) {
+                null
+            }
+        }
+    }
 }
 
 public class OtlpHttpExporter(
@@ -119,6 +144,11 @@ public class OtlpHttpExporter(
                 "OTLP POST $path returned HTTP ${response.statusCode()}: $shown",
                 statusCode = response.statusCode(),
                 responseBody = text,
+                retryAfterMillis =
+                    OtlpTransportException.parseRetryAfter(
+                        response.statusCode(),
+                        response.headers().firstValue("Retry-After").orElse(null),
+                    ),
             )
         }
         return response.body() ?: ByteArray(0)

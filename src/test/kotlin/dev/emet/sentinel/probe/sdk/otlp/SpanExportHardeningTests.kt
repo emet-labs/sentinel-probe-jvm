@@ -190,6 +190,81 @@ class SpanExportHardeningTests {
     }
 
     @Test
+    fun `every retryable status is retried and every other status is final`() {
+        val retryable = setOf(408, 425, 429, 500, 502, 503, 504)
+        for (status in retryable + setOf(400, 401, 403, 404, 409, 413, 422, 501)) {
+            val local = SequenceAllocator(nowUnixNanos = clock::get)
+            withSentinel(respond = { n -> if (n == 1) status else 200 }) { sentinel ->
+                val processor = processor(sentinel.origin, fast(parkedRetryCapacity = 0), local)
+                tracerOf(processor)
+                    .spanBuilder("sagashop.order.placed")
+                    .also(::contract)
+                    .startSpan()
+                    .end()
+                assertTrue(processor.forceFlush().join(5, TimeUnit.SECONDS).isSuccess)
+                if (status in retryable) {
+                    assertEquals(2, sentinel.requests.get(), "status $status is retried")
+                    assertEquals(1L, local.declaration().completeThrough, "status $status")
+                } else {
+                    assertEquals(1, sentinel.requests.get(), "status $status is final")
+                    assertEquals(0L, local.declaration().completeThrough, "status $status")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `the defaults are the standard retry policy`() {
+        val options = ExportOptions()
+        assertEquals(5, options.maxAttempts)
+        assertEquals(100L, options.initialBackoffMillis)
+        assertEquals(5_000L, options.maxBackoffMillis)
+    }
+
+    @Test
+    fun `the retry delay is exponential with jitter and capped, and honors Retry-After`() {
+        // jitter just below 1 is the top of the step; 0.0 is the bottom (half of it).
+        assertEquals(listOf(99L, 199L, 399L, 799L), (1..4).map { retryDelayMillis(it, 100, 5_000, null, 0.99999) })
+        assertEquals(listOf(50L, 100L, 200L, 400L), (1..4).map { retryDelayMillis(it, 100, 5_000, null, 0.0) })
+        assertTrue(retryDelayMillis(30, 100, 5_000, null, 0.9999999) in 4_990L..5_000L)
+        assertEquals(2_000L, retryDelayMillis(1, 100, 5_000, 2_000L, 0.5))
+        assertEquals(5_000L, retryDelayMillis(1, 100, 5_000, 3_600_000L, 0.5))
+        assertEquals(75L, retryDelayMillis(1, 100, 5_000, 0L, 0.5))
+    }
+
+    @Test
+    fun `Retry-After is read on 429 and 503 only, as seconds or an HTTP date`() {
+        val now = java.time.Instant.parse("2015-10-21T07:28:00Z")
+        assertEquals(2_000L, OtlpTransportException.parseRetryAfter(429, "2"))
+        assertEquals(3_000L, OtlpTransportException.parseRetryAfter(503, " 3 "))
+        assertEquals(null, OtlpTransportException.parseRetryAfter(500, "2"))
+        assertEquals(null, OtlpTransportException.parseRetryAfter(429, null))
+        assertEquals(null, OtlpTransportException.parseRetryAfter(429, "soon"))
+        assertEquals(5_000L, OtlpTransportException.parseRetryAfter(503, "Wed, 21 Oct 2015 07:28:05 GMT", now))
+        assertEquals(0L, OtlpTransportException.parseRetryAfter(503, "Wed, 21 Oct 2015 07:27:00 GMT", now))
+    }
+
+    @Test
+    fun `a huge Retry-After is capped at the maximum backoff`() {
+        withSentinel(
+            respond = { n -> if (n == 1) 429 else 200 },
+            headers = { n -> if (n == 1) mapOf("Retry-After" to "3600") else emptyMap() },
+        ) { sentinel ->
+            val processor = processor(sentinel.origin, fast())
+            tracerOf(processor)
+                .spanBuilder("sagashop.order.placed")
+                .also(::contract)
+                .startSpan()
+                .end()
+            val started = System.nanoTime()
+            assertTrue(processor.forceFlush().join(5, TimeUnit.SECONDS).isSuccess)
+            assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(2), "waited out the cap, not the hour")
+            assertEquals(2, sentinel.requests.get())
+            assertEquals(1L, sequence.declaration().completeThrough)
+        }
+    }
+
+    @Test
     fun `a 400 is not retried and the slot stays failed`() {
         withSentinel(respond = { 400 }) { sentinel ->
             val processor = processor(sentinel.origin, fast(parkedRetryCapacity = 0))
@@ -406,8 +481,9 @@ class SpanExportHardeningTests {
     private fun processor(
         origin: String,
         options: ExportOptions,
+        allocator: SequenceAllocator = sequence,
     ): OtlpExportingSpanProcessor =
-        OtlpExportingSpanProcessor(OtlpHttpExporter(origin, "sagashop-order"), sequence, options).also { cleanup.add { it.shutdown() } }
+        OtlpExportingSpanProcessor(OtlpHttpExporter(origin, "sagashop-order"), allocator, options).also { cleanup.add { it.shutdown() } }
 
     private val providers = HashMap<Any, SdkTracerProvider>()
 
@@ -496,6 +572,7 @@ class SpanExportHardeningTests {
     private fun withSentinel(
         respond: (Int) -> Int = { 200 },
         reply: (Int) -> ByteArray = { ByteArray(0) },
+        headers: (Int) -> Map<String, String> = { emptyMap() },
         block: (FakeSentinel) -> Unit,
     ) {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -509,6 +586,7 @@ class SpanExportHardeningTests {
             val status = respond(n)
             if (status in 200..299) sentinel.bodies.add(body)
             val answer = if (status in 200..299) reply(n) else "status $status".toByteArray()
+            headers(n).forEach { (name, value) -> exchange.responseHeaders.add(name, value) }
             exchange.sendResponseHeaders(status, if (answer.isEmpty()) -1 else answer.size.toLong())
             exchange.responseBody.use { it.write(answer) }
         }

@@ -11,9 +11,13 @@
 //   - The queue is bounded (queueCapacity). OVERFLOW POLICY: when it is full the span that just
 //     ended is dropped, not an older queued span. A dropped Event cannot be re-sent, so its slot
 //     stays FAILED for the life of the epoch; the epoch never closes over missing evidence.
-//   - A transport error (no response, 408, 425, 429, 5xx) is retried with exponential backoff, at
-//     most maxAttempts posts in all. A refusal or any other 4xx is not retried, because repeating
-//     it changes nothing. A 2xx that reports rejected spans is not retried either.
+//   - RETRY POLICY (the same in every Probe SDK, sdk/README.md): a transport error (no response)
+//     and HTTP 408, 425, 429, 500, 502, 503 and 504 are retried with exponential backoff and
+//     jitter, at most maxAttempts posts in all. A Retry-After on a 429 or 503 raises the wait,
+//     never past maxBackoffMillis. A refusal or any other status is not retried, because
+//     repeating it changes nothing. A 2xx that reports rejected spans is not retried either. A
+//     slot is marked EXPORTED only after a 2xx with zero rejected spans, so complete_through
+//     never passes a failed or in-flight export.
 //   - DUPLICATE EVENT ID POLICY: when Sentinel refuses a second delivery of an Event id it holds
 //     (evidence_conflict or identity_conflict), onError receives DuplicateEventId (reason
 //     "duplicate-event-id"), the slot stays FAILED, complete_through never passes it (missing
@@ -60,6 +64,7 @@ import io.opentelemetry.sdk.trace.ReadableSpan
 import io.opentelemetry.sdk.trace.SpanProcessor
 import io.opentelemetry.sdk.trace.data.SpanData
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -83,8 +88,10 @@ public data class ExportOptions(
     // queueCapacity bounds the spans waiting for the worker. A span ending while it is full is
     // dropped and its slot marked FAILED.
     val queueCapacity: Int = DEFAULT_QUEUE_CAPACITY,
-    // maxAttempts is the most posts one span gets on transport errors, the first included.
+    // maxAttempts is the most posts one span gets on a retryable failure, the first included.
     val maxAttempts: Int = DEFAULT_MAX_ATTEMPTS,
+    // initialBackoffMillis is the first retry step; it doubles per attempt, with jitter (50-100%
+    // of the step). maxBackoffMillis caps every wait, a server Retry-After included.
     val initialBackoffMillis: Long = DEFAULT_INITIAL_BACKOFF_MILLIS,
     val maxBackoffMillis: Long = DEFAULT_MAX_BACKOFF_MILLIS,
     // parkedRetryCapacity bounds the FAILED spans kept for later re-posting.
@@ -114,9 +121,9 @@ public data class ExportOptions(
 
     public companion object {
         public const val DEFAULT_QUEUE_CAPACITY: Int = 8192
-        public const val DEFAULT_MAX_ATTEMPTS: Int = 6
-        public const val DEFAULT_INITIAL_BACKOFF_MILLIS: Long = 250L
-        public const val DEFAULT_MAX_BACKOFF_MILLIS: Long = 4_000L
+        public const val DEFAULT_MAX_ATTEMPTS: Int = 5
+        public const val DEFAULT_INITIAL_BACKOFF_MILLIS: Long = 100L
+        public const val DEFAULT_MAX_BACKOFF_MILLIS: Long = 5_000L
         public const val DEFAULT_PARKED_CAPACITY: Int = 1024
         public const val DEFAULT_PARKED_INTERVAL_MILLIS: Long = 5_000L
         public const val DEFAULT_SHUTDOWN_TIMEOUT_MILLIS: Long = 5_000L
@@ -320,23 +327,37 @@ public class OtlpExportingSpanProcessor
                 } catch (error: Exception) {
                     return permanent(job, error)
                 }
-            var wait = options.initialBackoffMillis
             for (attempt in 1..attempts) {
-                val outcome = post(job, payload, quiet)
+                val retryAfter = RetryAfter()
+                val outcome = post(job, payload, quiet, retryAfter)
                 if (outcome != null) return outcome
+                val wait =
+                    retryDelayMillis(
+                        attempt,
+                        options.initialBackoffMillis,
+                        options.maxBackoffMillis,
+                        retryAfter.millis,
+                        ThreadLocalRandom.current().nextDouble(),
+                    )
                 if (attempt == attempts || closing || !sleep(wait)) break
-                wait = minOf(wait * 2, options.maxBackoffMillis)
             }
             failSlot(job.slot)
             if (!quiet && worker != null) park(job)
             return Outcome.PARKABLE
         }
 
-        // post makes one attempt. It returns null for a retryable transport error.
+        // RetryAfter carries the server's Retry-After out of one post.
+        private class RetryAfter {
+            var millis: Long? = null
+        }
+
+        // post makes one attempt. It returns null for a retryable failure (see
+        // OtlpTransportException.isRetryable) and records its Retry-After in retryAfter.
         private fun post(
             job: Job,
             payload: ByteArray,
             quiet: Boolean,
+            retryAfter: RetryAfter,
         ): Outcome? =
             try {
                 val rejection = exporter.postEncodedTraceOutcome(payload)
@@ -350,7 +371,12 @@ public class OtlpExportingSpanProcessor
                 }
             } catch (error: OtlpTransportException) {
                 if (!quiet) report(error)
-                if (error.isRetryable) null else permanent(job, null)
+                if (error.isRetryable) {
+                    retryAfter.millis = error.retryAfterMillis
+                    null
+                } else {
+                    permanent(job, null)
+                }
             } catch (error: Exception) {
                 permanent(job, error)
             }
@@ -472,4 +498,24 @@ private class CausalRootSpanData(
 
     @Suppress("OVERRIDE_DEPRECATION")
     override fun getParentSpanId(): String = SpanId.getInvalid()
+}
+
+// retryDelayMillis is the wait after failed attempt number attempt (1-based): the step
+// initialMillis * 2^(attempt-1), at most capMillis, with jitter (50-100% of the step; jitter is
+// in [0, 1)), raised to the server's Retry-After when that asks for longer, and never longer
+// than capMillis.
+internal fun retryDelayMillis(
+    attempt: Int,
+    initialMillis: Long,
+    capMillis: Long,
+    retryAfterMillis: Long?,
+    jitter: Double,
+): Long {
+    var step = initialMillis
+    repeat(attempt - 1) {
+        if (step < capMillis) step *= 2
+    }
+    step = minOf(step, capMillis)
+    val jittered = (step * (0.5 + jitter / 2)).toLong()
+    return minOf(capMillis, maxOf(jittered, retryAfterMillis ?: 0L))
 }
