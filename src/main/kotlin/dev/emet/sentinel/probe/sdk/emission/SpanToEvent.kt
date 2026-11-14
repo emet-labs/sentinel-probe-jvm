@@ -98,6 +98,25 @@ public open class SpanExportRefusal(
     cause: Throwable? = null,
 ) : IllegalArgumentException(message, cause)
 
+// DuplicateEventId is Sentinel's refusal of a second delivery of an Event id it already holds
+// (evidence_conflict or identity_conflict). The refusal is deterministic, so it is not retried,
+// and the span's Sequence slot stays FAILED: that slot number never reached Sentinel as an
+// Event, so complete_through must not pass it. Missing evidence never looks complete. The Event
+// under that id stays what Sentinel accepted first. reason is the stable code
+// "duplicate-event-id"; ExportOptions.onError receives this exception.
+public class DuplicateEventId(
+    public val sentinelMessage: String,
+) : SpanExportRefusal(
+        "Sentinel already holds an Event under this id and refused the redelivery ($sentinelMessage); the slot stays FAILED",
+    ) {
+    public val reason: String
+        get() = REASON
+
+    public companion object {
+        public const val REASON: String = "duplicate-event-id"
+    }
+}
+
 // MissingPredecessorId is a parent or link that would have fallen back to a span id.
 // The export stops. spanId is the hex id that was not stored.
 public class MissingPredecessorId(

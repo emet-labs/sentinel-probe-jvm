@@ -14,6 +14,11 @@
 //   - A transport error (no response, 408, 425, 429, 5xx) is retried with exponential backoff, at
 //     most maxAttempts posts in all. A refusal or any other 4xx is not retried, because repeating
 //     it changes nothing. A 2xx that reports rejected spans is not retried either.
+//   - DUPLICATE EVENT ID POLICY: when Sentinel refuses a second delivery of an Event id it holds
+//     (evidence_conflict or identity_conflict), onError receives DuplicateEventId (reason
+//     "duplicate-event-id"), the slot stays FAILED, complete_through never passes it (missing
+//     evidence never looks complete), and the span is neither retried nor parked. Any other
+//     rejection (slot_conflict) also stays FAILED.
 //   - A span whose attempts ran out stays FAILED and is parked (at most parkedRetryCapacity, the
 //     oldest forgotten first). While the queue is idle the worker re-posts the identical Event
 //     every parkedRetryIntervalMillis; the allocator accepts FAILED -> EXPORTED, so
@@ -40,6 +45,7 @@ import dev.emet.sentinel.model.v1.EventFilter
 import dev.emet.sentinel.probe.sdk.emission.ATTRIBUTE_PARENT_EVENT_ID
 import dev.emet.sentinel.probe.sdk.emission.ATTRIBUTE_SEQUENCE_EPOCH
 import dev.emet.sentinel.probe.sdk.emission.ATTRIBUTE_SEQUENCE_NUMBER
+import dev.emet.sentinel.probe.sdk.emission.DuplicateEventId
 import dev.emet.sentinel.probe.sdk.emission.SequenceAllocator
 import dev.emet.sentinel.probe.sdk.emission.Slot
 import dev.emet.sentinel.probe.sdk.emission.SpanExportRefusal
@@ -333,12 +339,14 @@ public class OtlpExportingSpanProcessor
             quiet: Boolean,
         ): Outcome? =
             try {
-                val rejected = exporter.postEncodedTrace(payload)
-                if (rejected == 0L) {
+                val rejection = exporter.postEncodedTraceOutcome(payload)
+                if (rejection.rejectedSpans == 0L) {
                     job.slot?.let { sequence?.markExported(it) }
                     Outcome.DELIVERED
+                } else if (rejection.isDuplicateEventId) {
+                    permanent(job, DuplicateEventId(rejection.errorMessage))
                 } else {
-                    permanent(job, SpanExportRefusal("Sentinel rejected $rejected span(s) of the export"))
+                    permanent(job, SpanExportRefusal("Sentinel rejected ${rejection.rejectedSpans} span(s) of the export"))
                 }
             } catch (error: OtlpTransportException) {
                 if (!quiet) report(error)

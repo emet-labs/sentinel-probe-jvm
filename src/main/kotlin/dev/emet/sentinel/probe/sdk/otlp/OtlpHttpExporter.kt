@@ -68,10 +68,13 @@ public class OtlpHttpExporter(
 
     // postEncodedTrace posts a body OtlpCodec.encodeTrace built and returns the rejected span
     // count, so a retry re-sends the identical bytes.
-    internal fun postEncodedTrace(encoded: ByteArray): Long {
+    internal fun postEncodedTrace(encoded: ByteArray): Long = postEncodedTraceOutcome(encoded).rejectedSpans
+
+    // postEncodedTraceOutcome is postEncodedTrace that keeps Sentinel's error_message too.
+    internal fun postEncodedTraceOutcome(encoded: ByteArray): Rejection {
         val body = post(TRACES_PATH, encoded)
         return try {
-            PartialSuccess.rejectedSpans(body)
+            PartialSuccess.rejection(body)
         } catch (error: IllegalArgumentException) {
             throw OtlpTransportException("OTLP POST $TRACES_PATH returned an undecodable response: ${error.message}", error)
         }

@@ -10,6 +10,7 @@ import dev.emet.sentinel.probe.sdk.emission.ATTRIBUTE_CLAIMED_SENSITIVITY
 import dev.emet.sentinel.probe.sdk.emission.ATTRIBUTE_EVENT_ID
 import dev.emet.sentinel.probe.sdk.emission.ATTRIBUTE_PARENT_EVENT_ID
 import dev.emet.sentinel.probe.sdk.emission.ATTRIBUTE_SCHEMA_VERSION
+import dev.emet.sentinel.probe.sdk.emission.DuplicateEventId
 import dev.emet.sentinel.probe.sdk.emission.FilteredRange
 import dev.emet.sentinel.probe.sdk.emission.ProbeSpanProcessor
 import dev.emet.sentinel.probe.sdk.emission.SequenceAllocator
@@ -200,6 +201,55 @@ class SpanExportHardeningTests {
             processor.forceFlush().join(5, TimeUnit.SECONDS)
             assertEquals(1, sentinel.requests.get())
             assertFailedSlot(1L)
+        }
+    }
+
+    @Test
+    fun `a refused evidence_conflict keeps the slot failed and is not retried or parked`() = duplicateKeepsSlotFailed("evidence_conflict")
+
+    @Test
+    fun `a refused identity_conflict keeps the slot failed and is not retried or parked`() = duplicateKeepsSlotFailed("identity_conflict")
+
+    private fun duplicateKeepsSlotFailed(kind: String) {
+        val refusal = partialSuccess(1, "append_events conflicted: $kind")
+        withSentinel(reply = { n -> if (n == 2) refusal else ByteArray(0) }) { sentinel ->
+            val processor = processor(sentinel.origin, fast())
+            val tracer = tracerOf(processor)
+            repeat(3) {
+                tracer
+                    .spanBuilder("sagashop.order.placed")
+                    .also(::contract)
+                    .startSpan()
+                    .end()
+            }
+            assertTrue(processor.forceFlush().join(5, TimeUnit.SECONDS).isSuccess)
+            val duplicate = errors.single() as DuplicateEventId
+            assertEquals("duplicate-event-id", duplicate.reason)
+            // Three slots; the second was refused, so complete_through stops at the first.
+            assertEquals(3L, sequence.declaration().lastEmitted)
+            assertEquals(1L, sequence.declaration().completeThrough)
+            Thread.sleep(150) // several parked-retry intervals: nothing re-posts the refusal
+            assertEquals(3, sentinel.requests.get())
+            assertEquals(1L, sequence.declaration().completeThrough)
+        }
+    }
+
+    @Test
+    fun `a slot_conflict rejection also stays failed as a plain refusal`() {
+        val refusal = partialSuccess(1, "append_events conflicted: slot_conflict")
+        withSentinel(reply = { refusal }) { sentinel ->
+            val processor = processor(sentinel.origin, fast())
+            tracerOf(processor)
+                .spanBuilder("sagashop.order.placed")
+                .also(::contract)
+                .startSpan()
+                .end()
+            assertTrue(processor.forceFlush().join(5, TimeUnit.SECONDS).isSuccess)
+            val error = errors.single()
+            assertFalse(error is DuplicateEventId)
+            assertTrue(error is SpanExportRefusal)
+            assertEquals(1, sentinel.requests.get())
+            assertEquals(0L, sequence.declaration().completeThrough)
         }
     }
 
@@ -429,8 +479,23 @@ class SpanExportHardeningTests {
             }
     }
 
+    private fun partialSuccess(
+        rejected: Long,
+        message: String,
+    ): ByteArray =
+        io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceResponse
+            .newBuilder()
+            .setPartialSuccess(
+                io.opentelemetry.proto.collector.trace.v1.ExportTracePartialSuccess
+                    .newBuilder()
+                    .setRejectedSpans(rejected)
+                    .setErrorMessage(message),
+            ).build()
+            .toByteArray()
+
     private fun withSentinel(
         respond: (Int) -> Int = { 200 },
+        reply: (Int) -> ByteArray = { ByteArray(0) },
         block: (FakeSentinel) -> Unit,
     ) {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -443,9 +508,9 @@ class SpanExportHardeningTests {
             val n = sentinel.requests.incrementAndGet()
             val status = respond(n)
             if (status in 200..299) sentinel.bodies.add(body)
-            val reply = if (status in 200..299) ByteArray(0) else "status $status".toByteArray()
-            exchange.sendResponseHeaders(status, if (reply.isEmpty()) -1 else reply.size.toLong())
-            exchange.responseBody.use { it.write(reply) }
+            val answer = if (status in 200..299) reply(n) else "status $status".toByteArray()
+            exchange.sendResponseHeaders(status, if (answer.isEmpty()) -1 else answer.size.toLong())
+            exchange.responseBody.use { it.write(answer) }
         }
         server.start()
         try {
