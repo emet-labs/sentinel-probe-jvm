@@ -67,6 +67,7 @@ class SameMachineVerdictTests {
                         attributes = listOf("sagashop.order.id" to "order-1001"),
                     ),
                 )
+                evaluationsSettled(periphery.baseUrl)
                 val verdicts = receiver.verdicts()
                 assertTrue(verdicts.isNotEmpty(), "the log receiver must observe a Verdict")
                 assertTrue(verdicts.any { it.id.contains("sagashop.p4.ship-requires-prior-charge") })
@@ -106,6 +107,7 @@ class SameMachineVerdictTests {
                         attributes = listOf("sagashop.order.id" to "order-2002"),
                     ),
                 )
+                evaluationsSettled(periphery.baseUrl)
                 val verdicts = receiver.verdicts()
                 assertTrue(verdicts.isNotEmpty(), "a covered ship with no successful charge still returns a Verdict")
                 assertTrue(verdicts.none { it.outcome == VerdictOutcome.VERDICT_OUTCOME_SATISFY })
@@ -114,6 +116,37 @@ class SameMachineVerdictTests {
             }
         }
     }
+
+    // Periphery evaluates after it acknowledges an OTLP post, and pushes the Verdict from its
+    // evaluation worker (#454). Read `requested` once from GET /v1/evaluations/queue and poll
+    // until `completed` reaches it, so the receiver has seen every push the posts caused.
+    private fun evaluationsSettled(baseUrl: String) {
+        var target: Long? = null
+        repeat(400) {
+            val request = HttpRequest.newBuilder(URI.create("$baseUrl/v1/evaluations/queue")).GET().build()
+            val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+            assertEquals(200, response.statusCode(), response.body())
+            val goal = target ?: counter(response.body(), "requested").also { target = it }
+            if (counter(response.body(), "completed") >= goal) {
+                // A failed pass still completes its requests; this stack never fails one.
+                assertEquals(0L, counter(response.body(), "failed_passes"), response.body())
+                return
+            }
+            Thread.sleep(10)
+        }
+        throw AssertionError("evaluations did not settle")
+    }
+
+    private fun counter(
+        body: String,
+        name: String,
+    ): Long =
+        Regex("\"$name\":(\\d+)")
+            .find(body)
+            ?.groupValues
+            ?.get(1)
+            ?.toLong()
+            ?: throw AssertionError("no $name in $body")
 
     private fun peripheryBin(): String {
         val bin = System.getProperty("sentinel.periphery.bin")
