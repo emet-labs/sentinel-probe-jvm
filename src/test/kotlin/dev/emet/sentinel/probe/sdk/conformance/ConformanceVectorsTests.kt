@@ -63,17 +63,17 @@ class ConformanceVectorsTests {
 
     @Test
     fun `manifest suite registry fails closed`() {
-        val manifest = loadVersion("manifest-v1.json", "1.1.0")
+        val manifest = loadVersion("manifest-v1.json", "1.3.0")
         val suites = manifest["suites"] as List<Map<String, String>>
         assertEquals(
-            listOf("spec_match", "int128", "enforcement_gate", "otlp_signal"),
+            listOf("spec_match", "int128", "enforcement_gate", "otlp_signal", "sequence_completeness"),
             suites.map { it.getValue("kind") },
         )
     }
 
     @Test
     fun `shared malformed corpus is rejected by category`() {
-        val manifest = loadVersion("manifest-v1.json", "1.1.0")
+        val manifest = loadVersion("manifest-v1.json", "1.3.0")
         val fixtures = manifest["malformed"] as List<Map<String, String>>
         for (fixture in fixtures) {
             assertEquals(
