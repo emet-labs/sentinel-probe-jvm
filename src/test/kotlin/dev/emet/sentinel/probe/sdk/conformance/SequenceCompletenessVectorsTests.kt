@@ -41,7 +41,7 @@ class SequenceCompletenessVectorsTests {
     @Suppress("UNCHECKED_CAST")
     private fun cases(): List<Map<String, Any?>> {
         val manifest = load("manifest-v1.json")
-        assertEquals("1.3.0", manifest["format_version"])
+        assertEquals("1.4.0", manifest["format_version"])
         val entry = (manifest["suites"] as List<Map<String, String>>).single { it["kind"] == "sequence_completeness" }
         val suite = load(entry.getValue("path"))
         assertEquals("1.3.0", suite["format_version"])
