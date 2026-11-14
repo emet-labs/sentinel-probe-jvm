@@ -6,17 +6,7 @@
 package dev.emet.sentinel.probe.sdk.otlp
 
 import dev.emet.sentinel.model.v1.ProducerCompletenessSignal
-import dev.emet.sentinel.probe.sdk.emission.ATTRIBUTE_SEQUENCE_EPOCH
-import dev.emet.sentinel.probe.sdk.emission.ATTRIBUTE_SEQUENCE_NUMBER
-import dev.emet.sentinel.probe.sdk.emission.SequenceAllocator
-import dev.emet.sentinel.probe.sdk.emission.Slot
 import dev.emet.sentinel.probe.sdk.emission.SpanExportRefusal
-import io.opentelemetry.api.common.AttributeKey
-import io.opentelemetry.context.Context
-import io.opentelemetry.sdk.common.CompletableResultCode
-import io.opentelemetry.sdk.trace.ReadWriteSpan
-import io.opentelemetry.sdk.trace.ReadableSpan
-import io.opentelemetry.sdk.trace.SpanProcessor
 import io.opentelemetry.sdk.trace.data.SpanData
 import java.io.IOException
 import java.net.URI
@@ -25,11 +15,22 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 
-// OtlpTransportException is an HTTP failure. The span was not accepted.
+// OtlpTransportException is an HTTP failure. The span was not accepted. statusCode is the HTTP
+// status, null when no response arrived (connect failure, timeout, interrupt). responseBody is
+// the start of the response body (at most 500 characters), empty when there is none; it is also
+// in the message.
 public class OtlpTransportException(
     message: String,
     cause: Throwable? = null,
-) : RuntimeException(message, cause)
+    public val statusCode: Int? = null,
+    public val responseBody: String = "",
+) : RuntimeException(message, cause) {
+    // isRetryable is true for a failure a later attempt can fix: no response, 408, 425, 429 and
+    // every 5xx. Any other status (400, 409, ...) is a verdict on the payload; repeating it
+    // changes nothing.
+    public val isRetryable: Boolean
+        get() = statusCode == null || statusCode == 408 || statusCode == 425 || statusCode == 429 || statusCode in 500..599
+}
 
 public class OtlpHttpExporter(
     baseUrl: String,
@@ -41,6 +42,10 @@ public class OtlpHttpExporter(
             .build(),
 ) {
     private val origin: String = baseUrl.trimEnd('/')
+
+    private companion object {
+        const val MAX_ERROR_BODY_CHARS = 500
+    }
 
     init {
         if (sourceHandle.isBlank()) throw SpanExportRefusal("source handle is blank")
@@ -59,8 +64,12 @@ public class OtlpHttpExporter(
     // exportSpansChecked posts the spans and returns the rejected span count from Sentinel's
     // ExportTraceServiceResponse. The export succeeded only when it returns 0. A non-2xx status
     // or an undecodable 2xx body throws OtlpTransportException.
-    public fun exportSpansChecked(spans: List<SpanData>): Long {
-        val body = post(TRACES_PATH, OtlpCodec.encodeTrace(spans))
+    public fun exportSpansChecked(spans: List<SpanData>): Long = postEncodedTrace(OtlpCodec.encodeTrace(spans))
+
+    // postEncodedTrace posts a body OtlpCodec.encodeTrace built and returns the rejected span
+    // count, so a retry re-sends the identical bytes.
+    internal fun postEncodedTrace(encoded: ByteArray): Long {
+        val body = post(TRACES_PATH, encoded)
         return try {
             PartialSuccess.rejectedSpans(body)
         } catch (error: IllegalArgumentException) {
@@ -100,71 +109,15 @@ public class OtlpHttpExporter(
                 response
                     .body()
                     ?.toString(Charsets.UTF_8)
-                    ?.take(500)
+                    ?.take(MAX_ERROR_BODY_CHARS)
                     .orEmpty()
-            throw OtlpTransportException("OTLP POST $path returned HTTP ${response.statusCode()}: $text")
+            val shown = text.ifBlank { "(empty body)" }
+            throw OtlpTransportException(
+                "OTLP POST $path returned HTTP ${response.statusCode()}: $shown",
+                statusCode = response.statusCode(),
+                responseBody = text,
+            )
         }
         return response.body() ?: ByteArray(0)
-    }
-}
-
-// OtlpExportingSpanProcessor posts every ended span through OtlpHttpExporter.
-// The host attaches it to the TracerProvider. The processor does not call Connect.
-//
-// With a SequenceAllocator, the processor stamps sentinel.sequence.epoch and
-// sentinel.sequence.number when a span starts, before any Event Filter, unless the host already
-// set both (a slot reserved ahead of its Event). When the span ends it marks the slot exported
-// only on HTTP 2xx with zero rejected spans, and failed otherwise; a failure is rethrown as
-// before. Without an allocator the processor behaves as it always has.
-public class OtlpExportingSpanProcessor(
-    private val exporter: OtlpHttpExporter,
-    private val sequence: SequenceAllocator? = null,
-) : SpanProcessor {
-    override fun onStart(
-        context: Context,
-        parentSpan: ReadWriteSpan,
-    ) {
-        // Without an allocator, emission is an end-of-span concern.
-        val allocator = sequence ?: return
-        if (parentSpan.getAttribute(SEQUENCE_EPOCH_KEY) != null && parentSpan.getAttribute(SEQUENCE_NUMBER_KEY) != null) return
-        val slot = allocator.allocate()
-        parentSpan.setAttribute(SEQUENCE_EPOCH_KEY, slot.epoch)
-        parentSpan.setAttribute(SEQUENCE_NUMBER_KEY, slot.number)
-    }
-
-    override fun isStartRequired(): Boolean = sequence != null
-
-    @Suppress("TooGenericExceptionCaught")
-    override fun onEnd(span: ReadableSpan) {
-        val allocator = sequence
-        if (allocator == null) {
-            exporter.exportSpan(span.toSpanData())
-            return
-        }
-        val epoch = span.getAttribute(SEQUENCE_EPOCH_KEY)
-        val number = span.getAttribute(SEQUENCE_NUMBER_KEY)
-        val slot = if (epoch != null && number != null) Slot(epoch, number) else null
-        val rejected =
-            try {
-                exporter.exportSpansChecked(listOf(span.toSpanData()))
-            } catch (error: RuntimeException) {
-                // A client-side refusal, an HTTP failure or an undecodable response: Sentinel
-                // does not hold the Event, so the slot must not count as exported.
-                slot?.let(allocator::markFailed)
-                throw error
-            }
-        if (slot == null) return
-        if (rejected == 0L) allocator.markExported(slot) else allocator.markFailed(slot)
-    }
-
-    override fun isEndRequired(): Boolean = true
-
-    override fun shutdown(): CompletableResultCode = CompletableResultCode.ofSuccess()
-
-    override fun forceFlush(): CompletableResultCode = CompletableResultCode.ofSuccess()
-
-    private companion object {
-        val SEQUENCE_EPOCH_KEY: AttributeKey<Long> = AttributeKey.longKey(ATTRIBUTE_SEQUENCE_EPOCH)
-        val SEQUENCE_NUMBER_KEY: AttributeKey<Long> = AttributeKey.longKey(ATTRIBUTE_SEQUENCE_NUMBER)
     }
 }

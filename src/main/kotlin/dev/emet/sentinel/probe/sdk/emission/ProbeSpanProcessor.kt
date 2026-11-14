@@ -23,6 +23,9 @@ public class ProbeSpanProcessor(
     // onEnd is invoked synchronously on span end with the span's SpanData. It must not block on
     // network: the enforcement gate's injected decide dependency is where blocking work belongs.
     private val onEnd: (span: SpanData) -> Unit,
+    // onError receives anything the callback throws. The span-end path runs inside host code and
+    // never throws: a failing callback is caught here.
+    private val onError: (Throwable) -> Unit = {},
 ) : SpanProcessor {
     override fun onStart(
         context: Context,
@@ -33,10 +36,19 @@ public class ProbeSpanProcessor(
 
     override fun isStartRequired(): Boolean = false
 
+    @Suppress("TooGenericExceptionCaught")
     override fun onEnd(span: ReadableSpan) {
-        // toSpanData() captures the span's typed attributes, links and timing as a stable
-        // snapshot, so the callback runs against ended data even if the SDK recycles the span.
-        onEnd(span.toSpanData())
+        try {
+            // toSpanData() captures the span's typed attributes, links and timing as a stable
+            // snapshot, so the callback runs against ended data even if the SDK recycles the span.
+            onEnd(span.toSpanData())
+        } catch (error: Throwable) {
+            try {
+                onError(error)
+            } catch (ignored: Throwable) {
+                // A failing error callback must not reach the host either.
+            }
+        }
     }
 
     override fun isEndRequired(): Boolean = true

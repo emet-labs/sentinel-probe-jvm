@@ -22,7 +22,6 @@ import java.net.InetSocketAddress
 import java.util.HexFormat
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -66,19 +65,26 @@ class OtlpExportingSpanProcessorTests {
     }
 
     @Test
-    fun `an HTTP failure marks the slot failed and is rethrown`() {
+    fun `an HTTP failure marks the slot failed and does not throw out of end`() {
+        val errors = ArrayList<Throwable>()
         withSentinel(500, "unavailable".toByteArray()) { sentinel ->
-            val span = start(sentinel)
-            assertFailsWith<OtlpTransportException> { span.end() }
+            val span = start(sentinel, options = ExportOptions(synchronous = true, onError = errors::add))
+            span.end()
             assertFailed(Slot(sequence.epoch(), 1L))
+            val failure = errors.filterIsInstance<OtlpTransportException>().single()
+            assertEquals(500, failure.statusCode)
+            assertEquals("unavailable", failure.responseBody)
+            assertTrue(failure.message!!.contains("unavailable"))
         }
     }
 
     @Test
-    fun `a client-side refusal marks the slot failed and is rethrown`() {
+    fun `a client-side refusal marks the slot failed and does not throw out of end`() {
+        val errors = ArrayList<Throwable>()
         withSentinel(200, ByteArray(0)) { sentinel ->
-            val span = start(sentinel, eventId = null)
-            assertFailsWith<SpanExportRefusal> { span.end() }
+            val span = start(sentinel, eventId = null, options = ExportOptions(synchronous = true, onError = errors::add))
+            span.end()
+            assertTrue(errors.single() is SpanExportRefusal)
             assertFailed(Slot(sequence.epoch(), 1L))
             assertEquals(0, sentinel.bodies.size)
         }
@@ -117,11 +123,12 @@ class OtlpExportingSpanProcessorTests {
         sentinel: FakeSentinel,
         eventId: String? = "01f0c0ffee-charge",
         slot: Slot? = null,
+        options: ExportOptions = ExportOptions(synchronous = true),
     ): Span {
         val provider =
             SdkTracerProvider
                 .builder()
-                .addSpanProcessor(OtlpExportingSpanProcessor(OtlpHttpExporter(sentinel.origin, "sagashop-payment"), sequence))
+                .addSpanProcessor(OtlpExportingSpanProcessor(OtlpHttpExporter(sentinel.origin, "sagashop-payment"), sequence, options))
                 .build()
         sentinel.providers.add(provider)
         val builder =

@@ -200,6 +200,14 @@ internal object OtlpCodec {
         rejectNonFinite(scope.scope.attributesList)
     }
 
+    // eventOf validates the span exactly as encodeTrace does and returns the Event it carries.
+    // The Event Filter is applied to this Event; a span that cannot become one throws
+    // SpanExportRefusal.
+    fun eventOf(span: SpanData): ProducerEvent {
+        refuseIncomplete(span)
+        return spanToEvent(conversionFromSpan(span))
+    }
+
     private fun encodeSpan(span: SpanData): Span {
         refuseIncomplete(span)
         val conversion = conversionFromSpan(span)
