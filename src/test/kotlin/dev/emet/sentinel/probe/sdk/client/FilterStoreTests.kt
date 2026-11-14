@@ -3,9 +3,12 @@ package dev.emet.sentinel.probe.sdk.client
 import dev.emet.sentinel.model.v1.EventFilter
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class FilterStoreTests {
@@ -146,12 +149,139 @@ class FilterStoreTests {
     }
 
     @Test
-    fun `equalEpoch semantics - null and zero are distinct`() {
+    fun `null and zero epochs are distinct`() {
         val store = FilterStore.newFilterStore(makeFilter(null))
         // Held no-epoch, new epoch present -> update.
         assertTrue(store.set(makeFilter(u64(0L))))
-        // Held epoch 0, new no-epoch -> update.
-        assertTrue(store.set(makeFilter(null)))
-        assertNull(store.epoch())
+        // Held epoch 0, new no-epoch -> refused: an epoch-less filter never replaces an epoch.
+        val held = store.get()
+        assertFalse(store.set(makeFilter(null)))
+        assertSame(held, store.get())
+        assertEquals(0L, store.epoch())
+    }
+
+    @Test
+    fun `first set applies whatever the epoch`() {
+        for (epoch in listOf(7L, 0L, null)) {
+            val store = FilterStore()
+            val first = makeFilter(epoch)
+            assertTrue(store.set(first))
+            assertSame(first, store.get())
+        }
+    }
+
+    @Test
+    fun `a lower epoch is refused and the held filter kept`() {
+        val store = FilterStore()
+        val held = makeFilter(5L)
+        store.set(held)
+        assertFalse(store.set(makeFilter(4L)))
+        assertFalse(store.set(makeFilter(0L)))
+        assertSame(held, store.get())
+        assertEquals(5L, store.epoch())
+    }
+
+    @Test
+    fun `an epoch-less filter after an epoch-bearing one is refused`() {
+        for (epoch in listOf(5L, 0L)) {
+            val held = makeFilter(epoch)
+            val store = FilterStore.newFilterStore(held)
+            assertFalse(store.set(makeFilter(null)))
+            assertFalse(store.set(null))
+            assertSame(held, store.get())
+        }
+    }
+
+    @Test
+    fun `a higher epoch after epoch zero replaces`() {
+        val store = FilterStore.newFilterStore(makeFilter(0L))
+        val one = makeFilter(1L)
+        assertTrue(store.set(one))
+        assertSame(one, store.get())
+    }
+
+    @Test
+    fun `epochs order as unsigned 64-bit values`() {
+        // 2^63-1, 2^63 and 2^64-1 as the signed Longs that carry them.
+        val u63Max = Long.MAX_VALUE
+        val u63 = Long.MIN_VALUE
+        val u64Max = -1L
+        val store = FilterStore()
+        assertTrue(store.set(makeFilter(u63Max)))
+        assertTrue(store.set(makeFilter(u63)), "2^63 is newer than 2^63-1")
+        val top = makeFilter(u64Max)
+        assertTrue(store.set(top), "2^64-1 is newer than 2^63")
+        assertFalse(store.set(makeFilter(u63)), "2^63 is older than 2^64-1")
+        assertSame(top, store.get())
+        val high = FilterStore.newFilterStore(makeFilter(u63))
+        assertFalse(high.shouldRefresh(u63Max))
+        assertTrue(high.shouldRefresh(u64Max))
+    }
+
+    @Test
+    fun `a seeded store refuses a regression`() {
+        val seed = makeFilter(9L)
+        val store = FilterStore.newFilterStore(seed)
+        assertFalse(store.set(makeFilter(8L)))
+        assertSame(seed, store.get())
+    }
+
+    @Test
+    fun `a refused set does not move later comparisons`() {
+        val store = FilterStore.newFilterStore(makeFilter(5L))
+        assertFalse(store.set(makeFilter(2L)))
+        assertFalse(store.set(makeFilter(3L)))
+        assertFalse(store.shouldRefresh(4L))
+        val six = makeFilter(6L)
+        assertTrue(store.set(six))
+        assertSame(six, store.get())
+    }
+
+    @Test
+    fun `shouldRefresh is true only for a strictly newer epoch`() {
+        val store = FilterStore.newFilterStore(makeFilter(5L))
+        assertFalse(store.shouldRefresh(4L))
+        assertFalse(store.shouldRefresh(5L))
+        assertTrue(store.shouldRefresh(6L))
+        assertTrue(FilterStore.newFilterStore(makeFilter(null)).shouldRefresh(1L))
+    }
+
+    @Test
+    fun `concurrent sets end at the highest epoch and never move backwards`() {
+        val writers = 8
+        val perWriter = 500
+        val store = FilterStore()
+        val start = CountDownLatch(1)
+        val done = AtomicBoolean(false)
+        val regression = AtomicReference<String?>(null)
+        val observer =
+            Thread {
+                var last = -1L
+                while (!done.get()) {
+                    val epoch = store.epoch() ?: continue
+                    if (epoch < last) {
+                        regression.compareAndSet(null, "epoch went from $last to $epoch")
+                        return@Thread
+                    }
+                    last = epoch
+                }
+            }
+        val threads =
+            (0 until writers).map { offset ->
+                Thread {
+                    start.await()
+                    // Each writer walks its residue class downward, so writers keep offering
+                    // epochs below the current maximum.
+                    for (i in perWriter downTo 1) store.set(makeFilter((i - 1L) * writers + offset + 1))
+                }
+            }
+        observer.start()
+        threads.forEach { it.start() }
+        start.countDown()
+        threads.forEach { it.join() }
+        done.set(true)
+        observer.join()
+        assertNull(regression.get())
+        assertEquals((writers * perWriter).toLong(), store.epoch())
     }
 }

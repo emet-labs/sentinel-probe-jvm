@@ -7,7 +7,8 @@
 //
 // Verdict, EventFilter, and DecideResponse are the payloads Sentinel sends back.
 // An unspecified decision action is an error. The gate reads the decoded
-// DecideResponse from memory. This type does not call Connect.
+// DecideResponse from memory, waiting for it up to the request's remaining
+// transport budget. This type does not call Connect.
 package dev.emet.sentinel.probe.sdk.otlp
 
 import com.sun.net.httpserver.HttpExchange
@@ -24,14 +25,32 @@ import dev.emet.sentinel.probe.sdk.enforcement.GateOutcome
 import dev.emet.sentinel.probe.sdk.enforcement.Options
 import dev.emet.sentinel.probe.sdk.enforcement.gate
 import dev.emet.sentinel.probe.v1.DecideRequest
+import dev.emet.sentinel.probe.v1.DecideResponse
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipException
 
 private const val DEFAULT_HOST: String = "127.0.0.1"
 private const val GZIP_LIMIT: Int = 8 * 1024 * 1024
+
+// DecisionTimer arms the expiry of one decision wait. arm schedules onExpire after budgetNs
+// nanoseconds and returns a handle whose close disarms it. A test supplies its own so a wait runs
+// without a wall clock; it may call onExpire, or deliver a log, from inside arm.
+public fun interface DecisionTimer {
+    public fun arm(
+        budgetNs: Long,
+        onExpire: () -> Unit,
+    ): AutoCloseable
+}
 
 public class OtlpLogReceiver
     @JvmOverloads
@@ -40,14 +59,32 @@ public class OtlpLogReceiver
         bindHost: String = DEFAULT_HOST,
         // port is the TCP port to bind; 0 picks a free one.
         bindPort: Int = 0,
+        // decisionTimer arms each decision wait. Null means a daemon scheduler the receiver owns
+        // and shuts down in close().
+        decisionTimer: DecisionTimer? = null,
     ) : AutoCloseable {
         private val server: HttpServer =
             HttpServer.create(InetSocketAddress(bindHost, bindPort), 0)
         private val verdicts = ArrayList<Verdict>()
-        private val decisions = HashMap<String, dev.emet.sentinel.probe.v1.DecideResponse>()
+        private val decisions = HashMap<String, DecideResponse>()
         private val decisionErrors = HashMap<String, Throwable>()
+        private val waiters = HashMap<String, MutableList<CompletableFuture<DecideResponse>>>()
         private val filterListeners = ArrayList<(EventFilter) -> Unit>()
         private val lock = Any()
+        private var closed = false
+
+        // removeOnCancelPolicy drops a disarmed timer from the queue at once. Without it every
+        // answered ask would keep its task, and the receiver and future it captures, queued until
+        // the budget elapsed, which can be up to Long.MAX_VALUE ns.
+        private val ownedScheduler: ScheduledExecutorService? =
+            if (decisionTimer == null) {
+                ScheduledThreadPoolExecutor(1) { task ->
+                    Thread(task, "sentinel-decision-timer").apply { isDaemon = true }
+                }.apply { removeOnCancelPolicy = true }
+            } else {
+                null
+            }
+        private val timer: DecisionTimer = decisionTimer ?: schedulerTimer(checkNotNull(ownedScheduler))
 
         // port is the TCP port actually bound.
         public val port: Int
@@ -71,17 +108,54 @@ public class OtlpLogReceiver
 
         public fun verdicts(): List<Verdict> = synchronized(lock) { verdicts.toList() }
 
-        // decide returns the DecideResponse already decoded for this request id.
-        // It opens no socket and does not call Connect.
+        // decide returns the DecideResponse decoded for this request id, waiting for it up to the
+        // request's remaining transport budget (ADR-0024). It opens no socket and does not call
+        // Connect.
+        //
+        //   - A refusal decoded for the id (an unspecified action) fails at once; a stored answer
+        //     wins at once. Neither arms a wait.
+        //   - An absent or zero budget arms no wait and returns a missing-decision error.
+        //   - Otherwise the waiter is registered under the lock, one timer is armed outside it for
+        //     exactly the budget (2^63 ns and above is capped at Long.MAX_VALUE), and decide blocks
+        //     until a matching DecideResponse log, a refusal for the id, expiry, or close.
+        //
+        // Every error is an unresolved ask, and the gate applies its fail mode. A late answer does
+        // not change an ask that has already expired.
         public fun decide(request: DecideRequest): DecideResult {
+            val requestId = request.requestId
+            val waiter = CompletableFuture<DecideResponse>()
             synchronized(lock) {
-                decisionErrors[request.requestId]?.let { return DecideResult.Err(it) }
-                val response = decisions[request.requestId]
-                return if (response == null) {
-                    DecideResult.Err(IllegalStateException("no DecideResponse log for ${request.requestId}"))
-                } else {
-                    DecideResult.Ok(response)
+                decisionErrors[requestId]?.let { return DecideResult.Err(it) }
+                decisions[requestId]?.let { return DecideResult.Ok(it) }
+                if (closed) return DecideResult.Err(IllegalStateException("log receiver closed"))
+                if (!request.hasRemainingTransportBudgetNanoseconds() || request.remainingTransportBudgetNanoseconds == 0L) {
+                    return DecideResult.Err(IllegalStateException("no DecideResponse log for $requestId"))
                 }
+                waiters.getOrPut(requestId) { ArrayList() }.add(waiter)
+            }
+            val budgetNs = request.remainingTransportBudgetNanoseconds.let { if (it < 0L) Long.MAX_VALUE else it }
+            val armed =
+                try {
+                    timer.arm(budgetNs) {
+                        removeWaiter(requestId, waiter)
+                        waiter.completeExceptionally(TimeoutException("timeout"))
+                    }
+                } catch (error: RejectedExecutionException) {
+                    // The owned scheduler is shut down, so close() has normally failed this waiter
+                    // already; this completes it if close() has not got there yet.
+                    waiter.completeExceptionally(error)
+                    AutoCloseable {}
+                }
+            try {
+                return DecideResult.Ok(waiter.get())
+            } catch (error: ExecutionException) {
+                return DecideResult.Err(error.cause ?: error)
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                removeWaiter(requestId, waiter)
+                return DecideResult.Err(error)
+            } finally {
+                armed.close()
             }
         }
 
@@ -107,8 +181,29 @@ public class OtlpLogReceiver
                 options,
             )
 
+        // close stops the server, fails every pending decide, and shuts down the owned scheduler.
         override fun close() {
+            val pending: List<CompletableFuture<DecideResponse>>
+            synchronized(lock) {
+                closed = true
+                pending = waiters.values.flatten()
+                waiters.clear()
+            }
+            val error = IllegalStateException("log receiver closed")
+            for (waiter in pending) waiter.completeExceptionally(error)
             server.stop(0)
+            ownedScheduler?.shutdownNow()
+        }
+
+        private fun removeWaiter(
+            requestId: String,
+            waiter: CompletableFuture<DecideResponse>,
+        ) {
+            synchronized(lock) {
+                val pending = waiters[requestId] ?: return
+                pending.remove(waiter)
+                if (pending.isEmpty()) waiters.remove(requestId)
+            }
         }
 
         private fun handle(exchange: HttpExchange) {
@@ -145,23 +240,32 @@ public class OtlpLogReceiver
                 val inbound = OtlpCodec.decodeInbound(bytes)
                 val listeners: List<(EventFilter) -> Unit>
                 val filters = ArrayList<EventFilter>()
+                val answered = ArrayList<Pair<CompletableFuture<DecideResponse>, DecideResponse>>()
                 synchronized(lock) {
                     for (item in inbound) {
                         when (item) {
                             is InboundLog.VerdictLog -> verdicts.add(item.verdict)
                             is InboundLog.FilterLog -> filters.add(item.filter)
-                            is InboundLog.DecisionLog -> decisions[item.response.requestId] = item.response
+                            is InboundLog.DecisionLog -> answered.addAll(storeDecision(item.response))
                         }
                     }
                     listeners = filterListeners.toList()
                 }
+                for ((waiter, response) in answered) waiter.complete(response)
+                // Each listener applies a pushed filter to its store, which refuses an older or
+                // epoch-less one, so a reordered push never downgrades the Probe's filter.
                 for (filter in filters) {
                     for (listener in listeners) listener(filter)
                 }
                 respond(exchange, 200, ByteArray(0), PROTOBUF_MEDIA_TYPE)
             } catch (error: UnspecifiedDecisionAction) {
                 if (error.requestId.isNotEmpty()) {
-                    synchronized(lock) { decisionErrors[error.requestId] = error }
+                    val failed =
+                        synchronized(lock) {
+                            decisionErrors[error.requestId] = error
+                            waiters.remove(error.requestId).orEmpty()
+                        }
+                    for (waiter in failed) waiter.completeExceptionally(error)
                 }
                 respond(exchange, 400, (error.message ?: "unspecified action").toByteArray())
             } catch (error: LogDecodeException) {
@@ -171,24 +275,13 @@ public class OtlpLogReceiver
             }
         }
 
-        private fun inflate(bytes: ByteArray): ByteArray =
-            try {
-                GZIPInputStream(ByteArrayInputStream(bytes)).use { input -> readLimited(input) }
-            } catch (error: ZipException) {
-                throw LogDecodeException("gzip inflate failed: ${error.message}", error)
-            }
-
-        private fun readLimited(input: GZIPInputStream): ByteArray {
-            val output = ByteArrayOutputStream()
-            val buffer = ByteArray(8 * 1024)
-            var total = 0
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) return output.toByteArray()
-                total += read
-                if (total > GZIP_LIMIT) throw LogDecodeException("gzip inflate exceeded the uncompressed limit")
-                output.write(buffer, 0, read)
-            }
+        // storeDecision records an answer under the lock and returns the waiters it releases. A
+        // later valid answer clears an earlier refusal for the id.
+        private fun storeDecision(response: DecideResponse): List<Pair<CompletableFuture<DecideResponse>, DecideResponse>> {
+            val requestId = response.requestId
+            decisionErrors.remove(requestId)
+            decisions[requestId] = response
+            return waiters.remove(requestId).orEmpty().map { it to response }
         }
 
         private fun respond(
@@ -201,4 +294,30 @@ public class OtlpLogReceiver
             exchange.sendResponseHeaders(status, body.size.toLong())
             exchange.responseBody.use { it.write(body) }
         }
+    }
+
+private fun inflate(bytes: ByteArray): ByteArray =
+    try {
+        GZIPInputStream(ByteArrayInputStream(bytes)).use { input -> readLimited(input) }
+    } catch (error: ZipException) {
+        throw LogDecodeException("gzip inflate failed: ${error.message}", error)
+    }
+
+private fun readLimited(input: GZIPInputStream): ByteArray {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(8 * 1024)
+    var total = 0
+    while (true) {
+        val read = input.read(buffer)
+        if (read < 0) return output.toByteArray()
+        total += read
+        if (total > GZIP_LIMIT) throw LogDecodeException("gzip inflate exceeded the uncompressed limit")
+        output.write(buffer, 0, read)
+    }
+}
+
+private fun schedulerTimer(scheduler: ScheduledExecutorService): DecisionTimer =
+    DecisionTimer { budgetNs, onExpire ->
+        val scheduled = scheduler.schedule(Runnable { onExpire() }, budgetNs, TimeUnit.NANOSECONDS)
+        AutoCloseable { scheduled.cancel(false) }
     }

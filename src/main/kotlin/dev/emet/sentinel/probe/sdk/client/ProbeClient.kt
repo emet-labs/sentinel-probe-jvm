@@ -43,6 +43,8 @@ public class ProbeClient(
     public fun acknowledgedEpoch(): Long? = store.epoch()
 
     // setFilter swaps in a new EventFilter, reporting whether the store was actually updated.
+    // Only a first filter or a strictly newer epoch updates it; an equal epoch is a no-op and an
+    // older or epoch-less filter is refused (see FilterStore.set).
     //
     // Where the new filter comes from is out of SDK scope: in v1 Sentinel pushes filters
     // (ADR-0006) and no push RPC exists in decision.proto, so the host calls setFilter when a

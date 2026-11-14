@@ -52,42 +52,65 @@ public class FilterStore internal constructor(
         return if (held.hasEpoch()) held.epoch else null
     }
 
-    // set swaps in a new filter. It reports whether the store was actually updated, which is
-    // true when the epoch changed or when this is the first set, and false when an equal epoch
-    // is re-pushed.
+    // set swaps in a new filter under the epoch order, reporting whether the store was actually
+    // updated. Epochs are unsigned 64-bit and only move forward (ADR-0006). With held the held
+    // filter's epoch and new the offered one's, either of which may be absent:
     //
-    // Mirrors filter-store.ts:31-38, including the subtle case where the held filter and the new
-    // filter both carry no epoch: that still counts as an update on the first set.
+    //   - Nothing held: any filter applies, including epoch 0 and an epoch-less one.
+    //   - Held is absent: a filter with an epoch (including 0) replaces it; an epoch-less one is
+    //     a no-op.
+    //   - Held is present: only a strictly greater epoch replaces it. An equal epoch is a no-op,
+    //     the ordinary at-least-once re-delivery. A lower or absent epoch is refused, so a
+    //     reordered or replayed push never downgrades the filter or the acknowledged epoch.
+    //
+    // A set that returns false keeps the held reference and changes no later comparison; it
+    // throws nothing and logs nothing. A null filter counts as epoch-less.
+    //
+    // An equal epoch is never applied, even when its content differs. The server rewrites the
+    // current epoch in place when its Readiness flips Warming to Active, so whether a Probe
+    // should accept that flip at an equal epoch is an open question (#534); the store
+    // keeps its earlier behaviour until it is decided. After a server store reset, epochs
+    // restart from 1 and the store refuses them until the Probe restarts; restarting is the
+    // recovery.
+    //
+    // Mirrors filter-store.ts. The proto field is uint64 and Kotlin carries it in a signed Long,
+    // so epochs compare with java.lang.Long.compareUnsigned: 2^63 and above sort above 2^63-1.
+    // The compare-and-set loop keeps the order under concurrent pushes.
     public fun set(filter: EventFilter?): Boolean {
-        val held = current.get()
-        if (held != null && equalEpoch(epochOf(held), epochOf(filter))) {
-            return false // epoch unchanged and not the first set -> no update
+        val offered = epochOf(filter)
+        while (true) {
+            val held = current.get()
+            if (held != null && !replaces(epochOf(held), offered)) {
+                return false // equal, older, or epoch-less: keep the held filter
+            }
+            if (current.compareAndSet(held, filter)) return true
         }
-        current.set(filter)
-        return true
     }
 
-    // shouldRefresh reports whether an announced epoch differs from the held one. No filter held
-    // means refresh; no announced epoch means there is nothing to compare against, so do not
-    // refresh.
+    // shouldRefresh reports whether an announced epoch is strictly newer (unsigned) than the
+    // held one. No epoch held means refresh; no announced epoch means there is nothing to compare
+    // against, so do not refresh.
     public fun shouldRefresh(newEpoch: Long?): Boolean {
         val held = epoch()
-        if (held == null) return true // no filter held -> refresh
+        if (held == null) return true // no epoch held -> refresh
         if (newEpoch == null) return false // no new epoch to compare
-        return held != newEpoch
+        return java.lang.Long.compareUnsigned(newEpoch, held) > 0
     }
 
     override fun toString(): String = "FilterStore(epoch=${epoch()})"
 }
 
-// equalEpoch compares two optional epochs BY VALUE. Kotlin's `==` on Long? already compares by
-// value (unlike Go's pointer comparison trap), but the helper is kept to mirror the reference's
-// explicitness and to document that two distinct boxed Longs holding the same value compare
-// equal here.
-private fun equalEpoch(
-    a: Long?,
-    b: Long?,
-): Boolean = a == b
+// replaces reports whether a filter at offered replaces one held at held: an absent offered
+// epoch never does, any offered epoch replaces an absent held one, and otherwise only a strictly
+// greater epoch in unsigned order does.
+internal fun replaces(
+    held: Long?,
+    offered: Long?,
+): Boolean {
+    if (offered == null) return false
+    if (held == null) return true
+    return java.lang.Long.compareUnsigned(offered, held) > 0
+}
 
 // epochOf is null-safe on the message itself, unlike the generated getEpoch, which flattens an
 // absent epoch to 0.
