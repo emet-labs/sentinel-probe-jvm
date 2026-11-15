@@ -113,7 +113,7 @@ tasks.test {
     testLogging {
         events("passed", "skipped", "failed")
     }
-    systemProperty("sentinel.repository.root", rootProject.projectDir.parentFile.parentFile.absolutePath)
+    systemProperty("sentinel.repository.root", rootProject.projectDir.absolutePath)
     val peripheryBin = System.getenv("SENTINEL_PERIPHERY_BIN")
     if (!peripheryBin.isNullOrBlank()) {
         systemProperty("sentinel.periphery.bin", peripheryBin)
